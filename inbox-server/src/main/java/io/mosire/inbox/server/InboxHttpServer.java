@@ -1,0 +1,468 @@
+package io.mosire.inbox.server;
+
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+import io.mosire.inbox.core.InboxException;
+import io.mosire.inbox.core.InboxService;
+import io.mosire.inbox.core.InboxStatus;
+import io.mosire.inbox.core.PushCommand;
+import io.mosire.inbox.core.PushResult;
+import io.mosire.inbox.core.StoredEvent;
+import io.mosire.inbox.sqlite.ApiCredential;
+import io.mosire.inbox.sqlite.SqliteApiCredentialStore;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/** Producer/Adapter 的标准 HTTP 面：JSON REST + SSE。默认只绑回环。 */
+public final class InboxHttpServer implements AutoCloseable {
+  private static final Logger LOG = LoggerFactory.getLogger(InboxHttpServer.class);
+  private static final int MAX_BODY = 1024 * 1024;
+  private static final int EVENT_BATCH = 100;
+
+  private final String host;
+  private final int port;
+  private final InboxService service;
+  private final SqliteApiCredentialStore credentials;
+  private final SseNotifier notifier;
+  private final Duration heartbeat;
+  private HttpServer server;
+  private ExecutorService executor;
+
+  public InboxHttpServer(
+      String host,
+      int port,
+      InboxService service,
+      SqliteApiCredentialStore credentials,
+      SseNotifier notifier,
+      Duration heartbeat) {
+    this.host = host;
+    this.port = port;
+    this.service = service;
+    this.credentials = credentials;
+    this.notifier = notifier;
+    this.heartbeat = heartbeat;
+  }
+
+  public synchronized void start() throws IOException {
+    if (server != null) {
+      return;
+    }
+    HttpServer created = HttpServer.create(new InetSocketAddress(host, port), 0);
+    executor = Executors.newVirtualThreadPerTaskExecutor();
+    created.setExecutor(executor);
+    created.createContext("/", this::handle);
+    created.start();
+    this.server = created;
+    LOG.info("Inbox HTTP API 已启动: http://{}:{}/v1", host, boundPort());
+  }
+
+  public int boundPort() {
+    return server == null ? port : server.getAddress().getPort();
+  }
+
+  private void handle(HttpExchange exchange) throws IOException {
+    String path = exchange.getRequestURI().getPath();
+    try {
+      if ("GET".equals(exchange.getRequestMethod()) && "/healthz".equals(path)) {
+        sendJson(exchange, 200, Map.of("status", "ok"));
+        return;
+      }
+      if ("GET".equals(exchange.getRequestMethod()) && "/readyz".equals(path)) {
+        boolean ready = service.inboxExists("main");
+        sendJson(exchange, ready ? 200 : 503, Map.of("status", ready ? "ready" : "not-ready"));
+        return;
+      }
+      route(exchange, path);
+    } catch (InboxException e) {
+      sendJson(exchange, statusFor(e.code()), new ApiError(e.code().name(), e.getMessage()).body());
+    } catch (IllegalArgumentException e) {
+      sendJson(exchange, 422, new ApiError("INVALID_ARGUMENT", e.getMessage()).body());
+    } catch (Exception e) {
+      LOG.error("HTTP 请求失败 path={}", path, e);
+      sendJson(exchange, 500, new ApiError("INTERNAL", "内部错误").body());
+    } finally {
+      exchange.close();
+    }
+  }
+
+  private void route(HttpExchange exchange, String path) throws IOException {
+    List<String> segments = segments(path);
+    if (segments.size() != 4
+        || !"v1".equals(segments.get(0))
+        || !"inboxes".equals(segments.get(1))) {
+      sendJson(exchange, 404, new ApiError("NOT_FOUND", "路由不存在").body());
+      return;
+    }
+    String inboxId = segments.get(2);
+    String resource = segments.get(3);
+    ApiCredential credential = authenticate(exchange);
+    if (credential == null) {
+      sendJson(exchange, 401, new ApiError("UNAUTHORIZED", "缺少或无效 Bearer token").body());
+      return;
+    }
+    if (!credential.allowsInbox(inboxId)) {
+      sendJson(exchange, 403, new ApiError("FORBIDDEN", "token 无权访问该 inbox").body());
+      return;
+    }
+    if (!service.inboxExists(inboxId)) {
+      sendJson(exchange, 404, new ApiError("NOT_FOUND", "inbox 不存在").body());
+      return;
+    }
+
+    switch (resource) {
+      case "items" -> {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+          methodNotAllowed(exchange, "POST");
+          return;
+        }
+        if (!requiresScope(exchange, credential, ApiScopes.ITEMS_WRITE)) {
+          return;
+        }
+        push(exchange, inboxId, credential);
+      }
+      case "status" -> {
+        if (!"GET".equals(exchange.getRequestMethod())) {
+          methodNotAllowed(exchange, "GET");
+          return;
+        }
+        if (!requiresScope(exchange, credential, ApiScopes.STATUS_READ)) {
+          return;
+        }
+        status(exchange, inboxId, credential);
+      }
+      case "events" -> {
+        if (!"GET".equals(exchange.getRequestMethod())) {
+          methodNotAllowed(exchange, "GET");
+          return;
+        }
+        if (!requiresScope(exchange, credential, ApiScopes.EVENTS_READ)) {
+          return;
+        }
+        events(exchange, inboxId, credential);
+      }
+      default -> sendJson(exchange, 404, new ApiError("NOT_FOUND", "资源不存在").body());
+    }
+  }
+
+  private void push(HttpExchange exchange, String inboxId, ApiCredential credential)
+      throws IOException {
+    String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
+    if (contentType != null && !contentType.toLowerCase().startsWith("application/json")) {
+      sendJson(exchange, 415, new ApiError("UNSUPPORTED_MEDIA_TYPE", "需要 application/json").body());
+      return;
+    }
+    byte[] body = readBody(exchange);
+    if (body == null) {
+      return;
+    }
+    if (body.length == 0) {
+      sendJson(exchange, 400, new ApiError("INVALID_JSON", "请求体为空").body());
+      return;
+    }
+    PushRequest request;
+    try {
+      request = InboxJson.MAPPER.readValue(body, PushRequest.class);
+    } catch (Exception e) {
+      sendJson(exchange, 400, new ApiError("INVALID_JSON", "请求体不是合法 JSON").body());
+      return;
+    }
+    String channel = request.channel();
+    if (channel == null || channel.isBlank()) {
+      sendJson(exchange, 422, new ApiError("INVALID_ARGUMENT", "channel 不能为空").body());
+      return;
+    }
+    if (!credential.allowsChannel(channel)) {
+      sendJson(exchange, 403, new ApiError("FORBIDDEN", "token 无权写入该 channel").body());
+      return;
+    }
+    String payload =
+        request.payload() == null
+            ? null
+            : request.payload().isTextual()
+                ? request.payload().asText()
+                : InboxJson.MAPPER.writeValueAsString(request.payload());
+    String kind = request.kind() == null || request.kind().isBlank() ? "notification" : request.kind();
+    PushResult result =
+        service.push(
+            new PushCommand(
+                inboxId,
+                channel,
+                kind,
+                request.title(),
+                payload,
+                request.payloadRef(),
+                request.dedupeKey(),
+                request.priority(),
+                null));
+    sendJson(
+        exchange,
+        result.duplicate() ? 200 : 201,
+        Map.of(
+            "itemId", result.itemId(),
+            "duplicate", result.duplicate(),
+            "revision", result.revision(),
+            "createdAt", result.createdAt().toString()));
+  }
+
+  private void status(HttpExchange exchange, String inboxId, ApiCredential credential)
+      throws IOException {
+    Set<String> channels = effectiveChannels(channels(exchange), credential);
+    InboxStatus status = service.status(inboxId, channels);
+    sendJson(
+        exchange,
+        200,
+        Map.of(
+            "inbox", status.inboxId(),
+            "revision", status.revision(),
+            "available", status.available(),
+            "claimed", status.claimed(),
+            "channels", status.channels(),
+            "updatedAt", status.updatedAt().toString()));
+  }
+
+  private void events(HttpExchange exchange, String inboxId, ApiCredential credential)
+      throws IOException {
+    String accept = exchange.getRequestHeaders().getFirst("Accept");
+    if (accept != null
+        && !accept.contains("text/event-stream")
+        && !accept.contains("*/*")) {
+      sendJson(exchange, 406, new ApiError("NOT_ACCEPTABLE", "需要 text/event-stream").body());
+      return;
+    }
+    long cursor;
+    String lastEventId = exchange.getRequestHeaders().getFirst("Last-Event-ID");
+    if (lastEventId == null || lastEventId.isBlank()) {
+      cursor = service.latestEventSeq(inboxId);
+    } else {
+      try {
+        cursor = Long.parseLong(lastEventId.trim());
+      } catch (NumberFormatException e) {
+        sendJson(exchange, 400, new ApiError("INVALID_CURSOR", "Last-Event-ID 非法").body());
+        return;
+      }
+      if (cursor < 0) {
+        sendJson(exchange, 400, new ApiError("INVALID_CURSOR", "Last-Event-ID 不能为负").body());
+        return;
+      }
+    }
+
+    exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+    exchange.getResponseHeaders().set("Cache-Control", "no-cache");
+    exchange.getResponseHeaders().set("X-Accel-Buffering", "no");
+    exchange.sendResponseHeaders(200, 0);
+    try (OutputStream out = exchange.getResponseBody()) {
+      while (!Thread.currentThread().isInterrupted()) {
+        long generation = notifier.generation();
+        List<StoredEvent> batch = service.eventsAfter(inboxId, cursor, EVENT_BATCH);
+        if (!batch.isEmpty()) {
+          for (StoredEvent event : batch) {
+            StoredEvent visible = filterEvent(event, credential.channels());
+            if (visible != null) {
+              writeEvent(out, visible);
+            }
+            cursor = event.seq();
+          }
+          continue;
+        }
+        if (!notifier.awaitChange(generation, heartbeat)) {
+          out.write(": ping\n\n".getBytes(StandardCharsets.UTF_8));
+          out.flush();
+        }
+      }
+    } catch (IOException e) {
+      LOG.debug("SSE 客户端断开 inbox={}", inboxId);
+    } catch (RuntimeException e) {
+      LOG.debug("SSE 流结束 inbox={} reason={}", inboxId, e.getMessage());
+    }
+  }
+
+  private void writeEvent(OutputStream out, StoredEvent event) throws IOException {
+    String json = InboxJson.MAPPER.writeValueAsString(CloudEvents.envelope(event));
+    String frame =
+        "id: " + event.seq() + "\n"
+            + "event: inbox.changed\n"
+            + "data: " + json + "\n\n";
+    out.write(frame.getBytes(StandardCharsets.UTF_8));
+    out.flush();
+  }
+
+  private ApiCredential authenticate(HttpExchange exchange) {
+    String authorization = exchange.getRequestHeaders().getFirst("Authorization");
+    if (authorization == null || !authorization.startsWith("Bearer ")) {
+      return null;
+    }
+    String token = authorization.substring("Bearer ".length()).trim();
+    return credentials.authenticate(token).orElse(null);
+  }
+
+  private boolean requiresScope(HttpExchange exchange, ApiCredential credential, String scope)
+      throws IOException {
+    if (!credential.hasScope(scope)) {
+      sendJson(exchange, 403, new ApiError("FORBIDDEN", "token 缺少 scope: " + scope).body());
+      return false;
+    }
+    return true;
+  }
+
+  private Set<String> channels(HttpExchange exchange) {
+    String raw = exchange.getRequestURI().getRawQuery();
+    if (raw == null || raw.isBlank()) {
+      return Set.of();
+    }
+    LinkedHashSet<String> out = new LinkedHashSet<>();
+    for (String pair : raw.split("&")) {
+      int equals = pair.indexOf('=');
+      if (equals < 0 || !"channel".equals(URLDecoder.decode(pair.substring(0, equals), StandardCharsets.UTF_8))) {
+        continue;
+      }
+      String value = URLDecoder.decode(pair.substring(equals + 1), StandardCharsets.UTF_8);
+      for (String part : value.split(",")) {
+        if (!part.isBlank()) {
+          out.add(part.trim());
+        }
+      }
+    }
+    return Set.copyOf(out);
+  }
+
+  private byte[] readBody(HttpExchange exchange) throws IOException {
+    String contentLength = exchange.getRequestHeaders().getFirst("Content-Length");
+    if (contentLength != null) {
+      try {
+        if (Long.parseLong(contentLength) > MAX_BODY) {
+          sendJson(exchange, 413, new ApiError("PAYLOAD_TOO_LARGE", "请求体超过 1 MiB").body());
+          return null;
+        }
+      } catch (NumberFormatException ignored) {
+        // 读取时再受 MAX_BODY 约束。
+      }
+    }
+    try (InputStream in = exchange.getRequestBody()) {
+      byte[] bytes = in.readNBytes(MAX_BODY + 1);
+      if (bytes.length > MAX_BODY) {
+        sendJson(exchange, 413, new ApiError("PAYLOAD_TOO_LARGE", "请求体超过 1 MiB").body());
+        return null;
+      }
+      return bytes;
+    }
+  }
+
+  private static Set<String> effectiveChannels(Set<String> requested, ApiCredential credential) {
+    if (credential.channels().isEmpty() || credential.channels().contains("*")) {
+      return requested;
+    }
+    if (requested.isEmpty()) {
+      return credential.channels();
+    }
+    LinkedHashSet<String> intersection = new LinkedHashSet<>(requested);
+    intersection.retainAll(credential.channels());
+    return Set.copyOf(intersection);
+  }
+
+  private static StoredEvent filterEvent(StoredEvent event, Set<String> allowed) {
+    if (allowed.isEmpty() || allowed.contains("*")) {
+      return event;
+    }
+    java.util.TreeMap<String, io.mosire.inbox.core.ChannelCounts> channels = new java.util.TreeMap<>();
+    long available = 0;
+    long claimed = 0;
+    for (Map.Entry<String, io.mosire.inbox.core.ChannelCounts> entry : event.channels().entrySet()) {
+      if (allowed.contains(entry.getKey())) {
+        channels.put(entry.getKey(), entry.getValue());
+        available += entry.getValue().available();
+        claimed += entry.getValue().claimed();
+      }
+    }
+    List<String> changed =
+        event.changedChannels().stream().filter(allowed::contains).toList();
+    if (changed.isEmpty()) {
+      return null;
+    }
+    return new StoredEvent(
+        event.seq(),
+        event.eventId(),
+        event.inboxId(),
+        event.revision(),
+        available,
+        claimed,
+        Map.copyOf(channels),
+        changed,
+        event.createdAt());
+  }
+
+  private static void sendJson(HttpExchange exchange, int status, Object body) throws IOException {
+    byte[] bytes = InboxJson.MAPPER.writeValueAsBytes(body);
+    exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+    exchange.getResponseHeaders().set("Cache-Control", "no-store");
+    exchange.sendResponseHeaders(status, bytes.length);
+    try (OutputStream out = exchange.getResponseBody()) {
+      out.write(bytes);
+    }
+  }
+
+  private static void methodNotAllowed(HttpExchange exchange, String allow) throws IOException {
+    exchange.getResponseHeaders().set("Allow", allow);
+    sendJson(exchange, 405, new ApiError("METHOD_NOT_ALLOWED", "方法不允许").body());
+  }
+
+  private static int statusFor(InboxException.Code code) {
+    return switch (code) {
+      case INVALID_ARGUMENT -> 422;
+      case NOT_FOUND -> 404;
+      case CONFLICT -> 409;
+      case UNAVAILABLE -> 409;
+      case CLAIM_INVALID, CLAIM_EXPIRED -> 409;
+      case INTERNAL -> 500;
+    };
+  }
+
+  private static List<String> segments(String path) {
+    String normalized = path == null ? "" : path;
+    if (normalized.startsWith("/")) {
+      normalized = normalized.substring(1);
+    }
+    if (normalized.endsWith("/") && normalized.length() > 1) {
+      normalized = normalized.substring(0, normalized.length() - 1);
+    }
+    if (normalized.isBlank()) {
+      return List.of();
+    }
+    return Arrays.asList(normalized.split("/"));
+  }
+
+  @Override
+  public synchronized void close() {
+    if (server != null) {
+      server.stop(0);
+      server = null;
+    }
+    if (executor != null) {
+      executor.shutdownNow();
+      executor = null;
+    }
+  }
+
+  record PushRequest(
+      String channel,
+      String kind,
+      String title,
+      com.fasterxml.jackson.databind.JsonNode payload,
+      String payloadRef,
+      String dedupeKey,
+      int priority) {}
+}
