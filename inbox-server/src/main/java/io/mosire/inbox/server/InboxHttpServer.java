@@ -27,6 +27,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -218,6 +219,7 @@ public final class InboxHttpServer implements AutoCloseable {
         }
         claimItems(exchange, inboxId, credential);
       }
+      case "occupancy" -> occupancy(exchange, inboxId, credential);
       case "status" -> {
         if (!"GET".equals(exchange.getRequestMethod())) {
           methodNotAllowed(exchange, "GET");
@@ -576,16 +578,21 @@ public final class InboxHttpServer implements AutoCloseable {
       throws IOException {
     Set<String> channels = effectiveChannels(channels(exchange), credential);
     InboxStatus status = service.status(inboxId, channels);
-    sendJson(
-        exchange,
-        200,
-        Map.of(
-            "inbox", status.inboxId(),
-            "revision", status.revision(),
-            "available", status.available(),
-            "claimed", status.claimed(),
-            "channels", status.channels(),
-            "updatedAt", status.updatedAt().toString()));
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("inbox", status.inboxId());
+    body.put("revision", status.revision());
+    body.put("available", status.available());
+    body.put("claimed", status.claimed());
+    body.put("channels", status.channels());
+    body.put("updatedAt", status.updatedAt().toString());
+    body.put("occupied", status.occupancy().occupied());
+    body.put("occupiedBy", status.occupancy().occupiedBy());
+    body.put(
+        "occupiedAt",
+        status.occupancy().occupiedAt() == null
+            ? null
+            : status.occupancy().occupiedAt().toString());
+    sendJson(exchange, 200, body);
   }
 
   private void events(HttpExchange exchange, String inboxId, ApiCredential credential)
@@ -827,6 +834,38 @@ public final class InboxHttpServer implements AutoCloseable {
       executor = null;
     }
   }
+
+  private void occupancy(HttpExchange exchange, String inboxId, ApiCredential credential)
+      throws IOException {
+    if ("GET".equals(exchange.getRequestMethod())) {
+      if (!requiresScope(exchange, credential, ApiScopes.STATUS_READ)) {
+        return;
+      }
+      sendJson(exchange, 200, service.occupancy(inboxId));
+      return;
+    }
+    if ("PUT".equals(exchange.getRequestMethod())) {
+      if (!requiresScope(exchange, credential, ApiScopes.INBOX_OCCUPY)) {
+        return;
+      }
+      OccupancyRequest request = readJsonBody(exchange, OccupancyRequest.class);
+      if (request == null) {
+        return;
+      }
+      sendJson(exchange, 200, service.occupy(inboxId, request.occupiedBy()));
+      return;
+    }
+    if ("DELETE".equals(exchange.getRequestMethod())) {
+      if (!requiresScope(exchange, credential, ApiScopes.INBOX_OCCUPY)) {
+        return;
+      }
+      sendJson(exchange, 200, service.vacate(inboxId));
+      return;
+    }
+    methodNotAllowed(exchange, "GET, PUT, DELETE");
+  }
+
+  record OccupancyRequest(String occupiedBy) {}
 
   record ItemListResponse(String inbox, List<ItemSummary> items, int count) {}
 

@@ -50,7 +50,7 @@ class InboxServiceTest {
   @Test
   void sweepRunsBeforeStatusAndSignalsWhenClaimsExpire() {
     store.expired = 2;
-    store.statusResult = new InboxStatus("main", 3, 1, 0, java.util.Map.of(), NOW);
+    store.statusResult = new InboxStatus("main", 3, 1, 0, java.util.Map.of(), NOW, new InboxOccupancy("main", false, null, null, NOW));
     InboxStatus status = service.status("main", Set.of("ticket"));
 
     assertThat(status.revision()).isEqualTo(3);
@@ -81,7 +81,7 @@ class InboxServiceTest {
 
   private static final class FakeStore implements InboxStore {
     PushResult pushResult = new PushResult("itm-1", false, 1, NOW);
-    InboxStatus statusResult = new InboxStatus("main", 0, 0, 0, java.util.Map.of(), NOW);
+    InboxStatus statusResult = new InboxStatus("main", 0, 0, 0, java.util.Map.of(), NOW, new InboxOccupancy("main", false, null, null, NOW));
     CompleteResult completeResult = new CompleteResult(0, 0, List.of(), List.of());
     PushCommand lastPush;
     int pushCalls;
@@ -101,6 +101,10 @@ class InboxServiceTest {
     }
 
     @Override public InboxStatus status(String inboxId, Set<String> channels) { return statusResult; }
+    @Override public InboxOccupancy occupancy(String inboxId) { return new InboxOccupancy(inboxId, false, null, null, NOW); }
+    @Override public InboxOccupancy occupy(String inboxId, String occupiedBy, Instant now) { return new InboxOccupancy(inboxId, true, occupiedBy, now, now); }
+    @Override public InboxOccupancy vacate(String inboxId, Instant now) { return new InboxOccupancy(inboxId, false, null, null, now); }
+    @Override public void clearAllOccupancy() {}
     @Override public List<ItemSummary> listAvailable(String inboxId, Set<String> channels, int limit, Instant now) { return List.of(); }
 
     @Override

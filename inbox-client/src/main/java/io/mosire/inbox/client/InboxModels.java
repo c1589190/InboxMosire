@@ -18,6 +18,16 @@ public final class InboxModels {
       long available,
       long claimed,
       Map<String, ChannelCounts> channels,
+      String updatedAt,
+      boolean occupied,
+      String occupiedBy,
+      String occupiedAt) {}
+
+  public record Occupancy(
+      String inboxId,
+      boolean occupied,
+      String occupiedBy,
+      String occupiedAt,
       String updatedAt) {}
 
   public record ItemSummary(

@@ -42,6 +42,9 @@ public final class InboxClientMcpTools {
         completeTool(),
         releaseTool(),
         pushTool(),
+        occupancyTool(),
+        occupyTool(),
+        vacateTool(),
         credentialInfoTool());
   }
 
@@ -173,6 +176,40 @@ public final class InboxClientMcpTools {
                   .priority(intValue(args, "priority", 0));
           return client.push(inbox(args), builder.build());
         });
+  }
+
+  private AgentTool occupancyTool() {
+    return tool(
+        "inbox_occupancy",
+        "Read the advisory inbox occupancy marker. Occupancy is not an access lock; token scope remains the access boundary.",
+        schema(
+            Map.of("inbox", prop("string", "Inbox id; defaults to the client default.")),
+            List.of()),
+        args -> client.occupancy(inbox(args)));
+  }
+
+  private AgentTool occupyTool() {
+    return tool(
+        "inbox_occupy",
+        "Mark this inbox as occupied by the current conversation/host. Advisory only; it does not block other token holders.",
+        schema(
+            Map.of(
+                "inbox", prop("string", "Inbox id; defaults to the client default."),
+                "occupiedBy", prop("string", "Human/runtime label for the occupant.")),
+            List.of("occupiedBy")),
+        args ->
+            client.occupy(
+                inbox(args), requiredString(args, "occupiedBy")));
+  }
+
+  private AgentTool vacateTool() {
+    return tool(
+        "inbox_vacate",
+        "Clear the advisory inbox occupancy marker.",
+        schema(
+            Map.of("inbox", prop("string", "Inbox id; defaults to the client default.")),
+            List.of()),
+        args -> client.vacate(inbox(args)));
   }
 
   private AgentTool credentialInfoTool() {

@@ -10,4 +10,5 @@ public record InboxStatus(
     long available,
     long claimed,
     Map<String, ChannelCounts> channels,
-    Instant updatedAt) {}
+    Instant updatedAt,
+    InboxOccupancy occupancy) {}

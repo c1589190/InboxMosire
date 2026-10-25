@@ -66,7 +66,7 @@ class InboxHttpServerTest {
             .credentials()
             .issue(
                 "ticket-adapter",
-                Set.of(ApiScopes.EVENTS_READ, ApiScopes.STATUS_READ),
+                Set.of(ApiScopes.EVENTS_READ, ApiScopes.STATUS_READ, ApiScopes.INBOX_OCCUPY),
                 "main",
                 Set.of("ticket"))
             .token();
@@ -185,6 +185,41 @@ class InboxHttpServerTest {
         .isGreaterThan(event.get("data").get("revision").asLong());
   }
 
+
+  @Test
+  void occupancyIsExposedInStatusAndCanBeCleared() throws Exception {
+    HttpRequest.Builder occupiedBuilder =
+        HttpRequest.newBuilder(URI.create(apiBase + "/occupancy"))
+            .header("Authorization", "Bearer " + ticketOnlyToken)
+            .header("Content-Type", "application/json")
+            .PUT(HttpRequest.BodyPublishers.ofString("{\"occupiedBy\":\"session-S1\"}"));
+    HttpResponse<String> occupied =
+        client.send(occupiedBuilder.build(), HttpResponse.BodyHandlers.ofString());
+    assertThat(occupied.statusCode()).isEqualTo(200);
+    JsonNode first = InboxJson.MAPPER.readTree(occupied.body());
+    assertThat(first.get("occupied").asBoolean()).isTrue();
+    assertThat(first.get("occupiedBy").asText()).isEqualTo("session-S1");
+
+    HttpResponse<String> status =
+        client.send(
+            HttpRequest.newBuilder(URI.create(apiBase + "/status"))
+                .header("Authorization", "Bearer " + ticketOnlyToken)
+                .GET()
+                .build(),
+            HttpResponse.BodyHandlers.ofString());
+    JsonNode statusJson = InboxJson.MAPPER.readTree(status.body());
+    assertThat(statusJson.get("occupied").asBoolean()).isTrue();
+    assertThat(statusJson.get("occupiedBy").asText()).isEqualTo("session-S1");
+
+    HttpResponse<String> vacated =
+        client.send(
+            HttpRequest.newBuilder(URI.create(apiBase + "/occupancy"))
+                .header("Authorization", "Bearer " + ticketOnlyToken)
+                .DELETE()
+                .build(),
+            HttpResponse.BodyHandlers.ofString());
+    assertThat(InboxJson.MAPPER.readTree(vacated.body()).get("occupied").asBoolean()).isFalse();
+  }
 
   @Test
   void channelScopedAdapterNeverSeesOtherChannels() throws Exception {

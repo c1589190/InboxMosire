@@ -80,6 +80,14 @@ class InboxClientAndMcpToolsTest {
           InboxClient.forTokenFile(base, tokenFile);
       assertThat(adapterClient.status("app-a", Set.of()).inbox()).isEqualTo("app-a");
 
+      InboxModels.Occupancy occupied = bootstrap.occupy("app-a", "program-a-session");
+      assertThat(occupied.occupied()).isTrue();
+      assertThat(occupied.occupiedBy()).isEqualTo("program-a-session");
+      assertThat(bootstrap.occupancy("app-a").occupied()).isTrue();
+      assertThat(bootstrap.status("app-a", Set.of()).occupied()).isTrue();
+      InboxModels.Occupancy vacated = bootstrap.vacate("app-a");
+      assertThat(vacated.occupied()).isFalse();
+
       InboxModels.CredentialView who = bootstrap.whoAmI();
       assertThat(who.inbox()).isEqualTo("app-a");
       assertThat(who.fingerprint()).startsWith("sha256:");
@@ -164,6 +172,20 @@ class InboxClientAndMcpToolsTest {
         String infoText = wireText(info);
         assertThat(infoText).contains("sha256:");
         assertThat(infoText).doesNotContain(token);
+
+        McpSchema.CallToolResult occupied =
+            mcp.callTool(
+                new McpSchema.CallToolRequest(
+                    "inbox_occupy", Map.of("occupiedBy", "program-session")));
+        assertThat(occupied.isError()).isFalse();
+        assertThat(JSON.readTree(wireText(occupied)).get("occupied").asBoolean()).isTrue();
+        McpSchema.CallToolResult occupancy =
+            mcp.callTool(new McpSchema.CallToolRequest("inbox_occupancy", Map.of()));
+        assertThat(JSON.readTree(wireText(occupancy)).get("occupiedBy").asText())
+            .isEqualTo("program-session");
+        McpSchema.CallToolResult vacated =
+            mcp.callTool(new McpSchema.CallToolRequest("inbox_vacate", Map.of()));
+        assertThat(JSON.readTree(wireText(vacated)).get("occupied").asBoolean()).isFalse();
       }
     }
   }
@@ -236,7 +258,8 @@ class InboxClientAndMcpToolsTest {
                 "items:read",
                 "items:manage",
                 "status:read",
-                "events:read")
+                "events:read",
+                "inbox:occupy")
             : Set.of(
                 "inbox:ensure",
                 "credentials:issue:self",
@@ -244,7 +267,8 @@ class InboxClientAndMcpToolsTest {
                 "items:read",
                 "items:manage",
                 "status:read",
-                "events:read");
+                "events:read",
+                "inbox:occupy");
     return daemon
         .database()
         .credentials()

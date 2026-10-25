@@ -305,6 +305,7 @@ public final class InboxMain {
           events:read              SSE event stream
           status:read              board snapshot
           inbox:ensure             ensure exact-bound inbox exists
+          inbox:occupy             mark/clear advisory inbox occupancy
           credentials:issue:self   issue child credentials for exact-bound inbox
           admin:inboxes            create/ensure any inbox
           admin:credentials        manage any credential

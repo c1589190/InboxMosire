@@ -22,6 +22,15 @@ public interface InboxStore extends AutoCloseable {
 
   InboxStatus status(String inboxId, Set<String> channels);
 
+  InboxOccupancy occupancy(String inboxId);
+
+  InboxOccupancy occupy(String inboxId, String occupiedBy, Instant now);
+
+  InboxOccupancy vacate(String inboxId, Instant now);
+
+  /** 服务进程启动时清理上一个进程留下的占用标记；占用不是持久业务事实。 */
+  void clearAllOccupancy();
+
   List<ItemSummary> listAvailable(
       String inboxId, Set<String> channels, int limit, Instant now);
 

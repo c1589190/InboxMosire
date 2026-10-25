@@ -11,6 +11,7 @@ import io.mosire.inbox.core.CompleteResult;
 import io.mosire.inbox.core.Completion;
 import io.mosire.inbox.core.CompletionAck;
 import io.mosire.inbox.core.CompletionOutcome;
+import io.mosire.inbox.core.InboxOccupancy;
 import io.mosire.inbox.core.InboxStatus;
 import io.mosire.inbox.core.InboxStore;
 import io.mosire.inbox.core.ItemSummary;
@@ -76,10 +77,14 @@ public final class SqliteInboxStore implements InboxStore {
           st,
           """
           CREATE TABLE IF NOT EXISTS inbox (
-            id          TEXT PRIMARY KEY,
-            revision    INTEGER NOT NULL DEFAULT 0,
-            created_at  TEXT NOT NULL,
-            updated_at  TEXT NOT NULL
+            id                  TEXT PRIMARY KEY,
+            revision            INTEGER NOT NULL DEFAULT 0,
+            created_at          TEXT NOT NULL,
+            updated_at          TEXT NOT NULL,
+            occupied            INTEGER NOT NULL DEFAULT 0,
+            occupied_by         TEXT,
+            occupied_at         TEXT,
+            occupancy_updated_at TEXT
           )
           """);
       exec(
@@ -152,6 +157,10 @@ public final class SqliteInboxStore implements InboxStore {
           )
           """);
       exec(st, "CREATE INDEX IF NOT EXISTS idx_event_inbox_seq ON inbox_event(inbox_id, seq)");
+      ensureColumn(st, "inbox", "occupied", "INTEGER NOT NULL DEFAULT 0");
+      ensureColumn(st, "inbox", "occupied_by", "TEXT");
+      ensureColumn(st, "inbox", "occupied_at", "TEXT");
+      ensureColumn(st, "inbox", "occupancy_updated_at", "TEXT");
       exec(
           st,
           "INSERT OR IGNORE INTO schema_migration(version, applied_at) VALUES (1, '"
@@ -267,6 +276,87 @@ public final class SqliteInboxStore implements InboxStore {
               command.inboxId(), revision, List.of(command.channel()), now);
           return new PushResult(itemId, false, revision, now);
         });
+  }
+
+  @Override
+  public InboxOccupancy occupancy(String inboxId) {
+    lock.lock();
+    try {
+      return occupancyLocked(inboxId);
+    } catch (SQLException e) {
+      throw SqliteSupport.internal("查询 inbox 占用状态失败", e);
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  @Override
+  public InboxOccupancy occupy(String inboxId, String occupiedBy, Instant now) {
+    lock.lock();
+    try {
+      InboxOccupancy current = occupancyLocked(inboxId);
+      if (!current.occupied()) {
+        try (PreparedStatement ps =
+            connection.prepareStatement(
+                """
+                UPDATE inbox
+                SET occupied = 1, occupied_by = ?, occupied_at = ?, occupancy_updated_at = ?
+                WHERE id = ?
+                """)) {
+          ps.setString(1, occupiedBy);
+          ps.setString(2, now.toString());
+          ps.setString(3, now.toString());
+          ps.setString(4, inboxId);
+          ps.executeUpdate();
+        }
+      }
+      return occupancyLocked(inboxId);
+    } catch (SQLException e) {
+      throw SqliteSupport.internal("标记 inbox 占用失败", e);
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  @Override
+  public InboxOccupancy vacate(String inboxId, Instant now) {
+    lock.lock();
+    try {
+      try (PreparedStatement ps =
+          connection.prepareStatement(
+              """
+              UPDATE inbox
+              SET occupied = 0, occupied_by = NULL, occupied_at = NULL, occupancy_updated_at = ?
+              WHERE id = ?
+              """)) {
+        ps.setString(1, now.toString());
+        ps.setString(2, inboxId);
+        if (ps.executeUpdate() != 1) {
+          throw SqliteSupport.notFound("inbox 不存在: " + inboxId);
+        }
+      }
+      return occupancyLocked(inboxId);
+    } catch (SQLException e) {
+      throw SqliteSupport.internal("释放 inbox 占用失败", e);
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  @Override
+  public void clearAllOccupancy() {
+    lock.lock();
+    try (PreparedStatement ps =
+        connection.prepareStatement(
+            "UPDATE inbox SET occupied = 0, occupied_by = NULL, occupied_at = NULL, "
+                + "occupancy_updated_at = ?")) {
+      ps.setString(1, Instant.now().toString());
+      ps.executeUpdate();
+    } catch (SQLException e) {
+      throw SqliteSupport.internal("清理 inbox 占用状态失败", e);
+    } finally {
+      lock.unlock();
+    }
   }
 
   @Override
@@ -779,8 +869,11 @@ public final class SqliteInboxStore implements InboxStore {
   private InboxStatus statusLocked(String inboxId, Set<String> channels) throws SQLException {
     long revision;
     Instant updatedAt;
+    InboxOccupancy occupancy;
     try (PreparedStatement ps =
-        connection.prepareStatement("SELECT revision, updated_at FROM inbox WHERE id = ?")) {
+        connection.prepareStatement(
+            "SELECT revision, updated_at, occupied, occupied_by, occupied_at, occupancy_updated_at "
+                + "FROM inbox WHERE id = ?")) {
       ps.setString(1, inboxId);
       try (ResultSet rs = ps.executeQuery()) {
         if (!rs.next()) {
@@ -788,6 +881,13 @@ public final class SqliteInboxStore implements InboxStore {
         }
         revision = rs.getLong("revision");
         updatedAt = Instant.parse(rs.getString("updated_at"));
+        occupancy =
+            new InboxOccupancy(
+                inboxId,
+                rs.getInt("occupied") != 0,
+                rs.getString("occupied_by"),
+                parseInstant(rs.getString("occupied_at")),
+                parseInstant(rs.getString("occupancy_updated_at")));
       }
     }
 
@@ -831,7 +931,28 @@ public final class SqliteInboxStore implements InboxStore {
         available,
         claimed,
         Collections.unmodifiableMap(channelCounts),
-        updatedAt);
+        updatedAt,
+        occupancy);
+  }
+
+  private InboxOccupancy occupancyLocked(String inboxId) throws SQLException {
+    try (PreparedStatement ps =
+        connection.prepareStatement(
+            "SELECT occupied, occupied_by, occupied_at, occupancy_updated_at "
+                + "FROM inbox WHERE id = ?")) {
+      ps.setString(1, inboxId);
+      try (ResultSet rs = ps.executeQuery()) {
+        if (!rs.next()) {
+          throw SqliteSupport.notFound("inbox 不存在: " + inboxId);
+        }
+        return new InboxOccupancy(
+            inboxId,
+            rs.getInt("occupied") != 0,
+            rs.getString("occupied_by"),
+            parseInstant(rs.getString("occupied_at")),
+            parseInstant(rs.getString("occupancy_updated_at")));
+      }
+    }
   }
 
   private void requireInboxLocked(String inboxId) throws SQLException {
@@ -984,6 +1105,26 @@ public final class SqliteInboxStore implements InboxStore {
     } catch (NoSuchAlgorithmException e) {
       throw new IllegalStateException("JVM 缺少 SHA-256", e);
     }
+  }
+
+  private static void ensureColumn(
+      Statement statement, String table, String name, String definition) {
+    try {
+      try (ResultSet rs = statement.executeQuery("PRAGMA table_info(" + table + ")")) {
+        while (rs.next()) {
+          if (name.equalsIgnoreCase(rs.getString("name"))) {
+            return;
+          }
+        }
+      }
+      statement.execute("ALTER TABLE " + table + " ADD COLUMN " + name + " " + definition);
+    } catch (SQLException e) {
+      throw SqliteSupport.internal("迁移 " + table + "." + name + " 失败", e);
+    }
+  }
+
+  private static Instant parseInstant(String value) {
+    return value == null || value.isBlank() ? null : Instant.parse(value);
   }
 
   private static void exec(Statement statement, String sql) throws SQLException {

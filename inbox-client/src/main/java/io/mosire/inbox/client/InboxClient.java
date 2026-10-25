@@ -75,6 +75,33 @@ public final class InboxClient {
         200);
   }
 
+  public InboxModels.Occupancy occupancy(String inboxId) {
+    return requestJson(
+        "GET",
+        "/v1/inboxes/" + encode(inboxId) + "/occupancy",
+        null,
+        InboxModels.Occupancy.class,
+        200);
+  }
+
+  public InboxModels.Occupancy occupy(String inboxId, String occupiedBy) {
+    return requestJson(
+        "PUT",
+        "/v1/inboxes/" + encode(inboxId) + "/occupancy",
+        Map.of("occupiedBy", occupiedBy == null ? "" : occupiedBy),
+        InboxModels.Occupancy.class,
+        200);
+  }
+
+  public InboxModels.Occupancy vacate(String inboxId) {
+    return requestJson(
+        "DELETE",
+        "/v1/inboxes/" + encode(inboxId) + "/occupancy",
+        null,
+        InboxModels.Occupancy.class,
+        200);
+  }
+
   public InboxModels.ItemList list(String inboxId, Set<String> channels, int limit) {
     String query = channelQuery(channels) + (channels == null || channels.isEmpty() ? "?" : "&") + "limit=" + limit;
     return requestJson(
@@ -204,7 +231,7 @@ public final class InboxClient {
             inboxId,
             new InboxModels.CredentialIssueRequest(
                 label,
-                Set.of("status:read", "events:read"),
+                Set.of("status:read", "events:read", "inbox:occupy"),
                 channels == null ? Set.of() : channels,
                 seconds));
     TokenStore.writeAtomic(tokenFile, issued.token());

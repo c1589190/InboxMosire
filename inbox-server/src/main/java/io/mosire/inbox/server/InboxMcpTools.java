@@ -64,14 +64,18 @@ public final class InboxMcpTools {
           String inbox = McpToolSupport.inbox(args, defaultInbox);
           Set<String> channels = McpToolSupport.stringSet(args, "channels");
           InboxStatus status = service.status(inbox, channels);
-          return (
-              Map.of(
-                  "inbox", status.inboxId(),
-                  "revision", status.revision(),
-                  "available", status.available(),
-                  "claimed", status.claimed(),
-                  "channels", status.channels(),
-                  "updatedAt", McpToolSupport.timestamp(status.updatedAt())));
+          Map<String, Object> result = new LinkedHashMap<>();
+          result.put("inbox", status.inboxId());
+          result.put("revision", status.revision());
+          result.put("available", status.available());
+          result.put("claimed", status.claimed());
+          result.put("channels", status.channels());
+          result.put("updatedAt", McpToolSupport.timestamp(status.updatedAt()));
+          result.put("occupied", status.occupancy().occupied());
+          result.put("occupiedBy", status.occupancy().occupiedBy());
+          result.put(
+              "occupiedAt", McpToolSupport.timestamp(status.occupancy().occupiedAt()));
+          return result;
         });
   }
 

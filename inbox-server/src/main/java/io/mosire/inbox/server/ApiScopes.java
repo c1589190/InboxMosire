@@ -9,6 +9,7 @@ public final class ApiScopes {
   public static final String EVENTS_READ = "events:read";
   public static final String STATUS_READ = "status:read";
   public static final String INBOX_ENSURE = "inbox:ensure";
+  public static final String INBOX_OCCUPY = "inbox:occupy";
   public static final String CREDENTIALS_ISSUE_SELF = "credentials:issue:self";
   public static final String ADMIN_INBOXES = "admin:inboxes";
   public static final String ADMIN_CREDENTIALS = "admin:credentials";
@@ -21,6 +22,7 @@ public final class ApiScopes {
           EVENTS_READ,
           STATUS_READ,
           INBOX_ENSURE,
+          INBOX_OCCUPY,
           CREDENTIALS_ISSUE_SELF,
           ADMIN_INBOXES,
           ADMIN_CREDENTIALS);

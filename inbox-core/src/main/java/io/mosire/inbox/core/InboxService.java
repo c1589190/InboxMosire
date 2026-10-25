@@ -70,6 +70,26 @@ public final class InboxService {
     return store.status(inboxId, normalized);
   }
 
+  public InboxOccupancy occupancy(String inboxId) {
+    requireId("inbox", inboxId);
+    return store.occupancy(inboxId);
+  }
+
+  public InboxOccupancy occupy(String inboxId, String occupiedBy) {
+    requireId("inbox", inboxId);
+    requireText("occupiedBy", occupiedBy, 200, false);
+    return store.occupy(inboxId, occupiedBy, clock.instant());
+  }
+
+  public InboxOccupancy vacate(String inboxId) {
+    requireId("inbox", inboxId);
+    return store.vacate(inboxId, clock.instant());
+  }
+
+  public void clearAllOccupancy() {
+    store.clearAllOccupancy();
+  }
+
   public List<ItemSummary> listAvailable(String inboxId, Set<String> channels, int limit) {
     requireId("inbox", inboxId);
     Set<String> normalized = normalizeChannels(channels);

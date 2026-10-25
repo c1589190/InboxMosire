@@ -48,6 +48,8 @@ public final class InboxDaemon implements AutoCloseable {
       InboxService service =
           new InboxService(database.inboxStore(), Clock.systemUTC(), notifier);
       service.createInbox(config.defaultInbox());
+      // Occupancy 表示“当前活着的连接/会话占用”，不是持久业务事实。
+      service.clearAllOccupancy();
 
       InboxHttpServer http =
           new InboxHttpServer(
