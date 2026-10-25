@@ -5,6 +5,7 @@
 - 版本：`0.1.0-SNAPSHOT`
 - 阶段：后端多程序接入 v2、embedded server、DSH v2 多 binding 均已完成
 - 最近代码提交：`56df47a feat(embedded): 提供一行启动独立 InboxMosire server 的共享库`
+- 最近文档提交：`555a268 docs(upstream): 增加其他项目接入与创建 inbox 提示词`
 
 ## 已完成
 
@@ -83,14 +84,16 @@
   - wake token 可读取并清除占用；
   - 清理后 app-a/app-b 仍各有 1 条 available item。
 
-## live 实例
+## live 实例（已停止）
+
+按要求已停止 `inboxd-live.service`，18765/18766 均不再监听。
+
+数据、bindings、token secret 仍保留在本机 `.work/live`，未删除：
 
 ```text
-API/SSE: http://127.0.0.1:18765
-MCP:     http://127.0.0.1:18766/mcp
-Data:    .work/live/data
+Data:     .work/live/data
 Bindings: .work/live/bindings/app-a.json, app-b.json
-Secrets: .work/live/secrets (0600, not committed)
+Secrets:  .work/live/secrets (0600, not committed)
 ```
 
 ## DSH 对接状态
