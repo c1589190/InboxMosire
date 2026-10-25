@@ -13,10 +13,13 @@ scripts/gate.sh full
 
 - Maven 退出码；
 - Surefire 测试计数；
+- Checkstyle 0 violations；
 - 真 HTTP/SSE 测试；
 - 官方 MCP client 的 initialize/tools/list/tools/call；
 - git status 与提交 hash；
 - 安全审计：日志/SSE 不含 token 与正文。
+
+当前完整门禁结果记录在 `docs/agents/STATUS.md`。
 
 ## 禁止
 
