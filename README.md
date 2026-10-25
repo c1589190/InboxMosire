@@ -68,6 +68,7 @@ try (EmbeddedInboxServer inbox = EmbeddedInboxServer.start("app-a")) {
 - [`docs/upstream/wake-adapter-contract.md`](docs/upstream/wake-adapter-contract.md)
 - [`docs/upstream/program-integration.md`](docs/upstream/program-integration.md)
 - [`docs/upstream/embedded-server.md`](docs/upstream/embedded-server.md)
+- [`docs/upstream/OTHER-PROJECT-INTEGRATION-PROMPT.md`](docs/upstream/OTHER-PROJECT-INTEGRATION-PROMPT.md)
 - [`docs/upstream/DSH-MULTI-BINDING-PROMPT.md`](docs/upstream/DSH-MULTI-BINDING-PROMPT.md)
 - [`docs/api/openapi.yaml`](docs/api/openapi.yaml)
 - [`docs/agents/STATUS.md`](docs/agents/STATUS.md)

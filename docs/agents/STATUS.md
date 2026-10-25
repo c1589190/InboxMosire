@@ -3,7 +3,7 @@
 - 日期：2026-10-25
 - 分支：`main`
 - 版本：`0.1.0-SNAPSHOT`
-- 阶段：后端多程序接入 v2 完成；等待 `InboxMosire-DSH` 多 binding 升级
+- 阶段：后端多程序接入 v2、embedded server、DSH v2 多 binding 均已完成
 - 最近代码提交：`56df47a feat(embedded): 提供一行启动独立 InboxMosire server 的共享库`
 
 ## 已完成
@@ -93,16 +93,22 @@ Bindings: .work/live/bindings/app-a.json, app-b.json
 Secrets: .work/live/secrets (0600, not committed)
 ```
 
-## 等待 DSH
+## DSH 对接状态
 
-`InboxMosire-DSH` 当前仍是 1 inbox / 1 binding 版本。下一步按
-`docs/upstream/DSH-MULTI-BINDING-PROMPT.md` 升级到 v2：
+用户确认隔壁 v2 验收成功。`InboxMosire-DSH` 已到 commit
+`0391ea5 docs(acceptance): record the post-restart v2 web-profile loop`，远程 `origin/main` 同步。
+
+已验收：
 
 - 单 host 多 session binding；
 - S1→app-a、S2→app-b；
 - 每 binding 独立 SSE/cursor/revision/wake；
-- 读取 `adapterTokenRef`，不接触 raw token 日志；
-- Mode A 下目标会话使用程序自有 MCP，不直连中心 MCP。
+- Web profile 重启迁移 v1 state 到 v2；
+- Mode A 下目标会话使用程序自有 MCP，不直连中心 MCP；
+- occupancy bind/unbind 清理。
+
+其他项目接入提示词：
+`docs/upstream/OTHER-PROJECT-INTEGRATION-PROMPT.md`。
 
 ## 已知限制
 
