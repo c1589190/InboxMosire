@@ -23,8 +23,9 @@ scripts/gate.sh full
 
 ## v3 验证补充（2026-10-25）
 
-- `./mvnw -B -ntp clean install`：28 tests，0 failures/errors/skipped；所有模块 Checkstyle 0。
+- `./mvnw -B -ntp clean install`：30 tests，0 failures/errors/skipped；所有模块 Checkstyle 0。
 - occupancy：占用、status 可见、其他合法 token 仍可访问、wake token 清除、daemon 启动清空旧占用均通过。
+- embedded：随机端口启动、自动创建 inbox、client 操作、close 清理临时目录、自定义 dataDir 保留均通过。
 - 真实 live 实例：旧 SQLite schema 迁移、旧 token 兼容、共享 client provision/issue/descriptor、scope 403、SSE 隐私扫描均通过。
 - 证据：`.work/live/logs/verification-v2.txt`、`.work/live/logs/verification-occupancy.txt`（本机，不入库）。
 

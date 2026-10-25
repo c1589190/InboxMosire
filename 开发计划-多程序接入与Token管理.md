@@ -311,7 +311,10 @@ GET  /v1/admin/whoami
 - Phase 4 DSH 多 binding：⏳ 交给 `InboxMosire-DSH`。
 - Phase 5 端到端：⏳ 等 DSH v2。
 
-补充（2026-10-25）：advisory occupancy 已先完成。它只是 `occupied/occupiedBy` 提示，不提供访问锁；访问控制仍由 token scope 决定。
+补充（2026-10-25）：
+
+- advisory occupancy 已先完成。它只是 `occupied/occupiedBy` 提示，不提供访问锁；访问控制仍由 token scope 决定。
+- `inbox-embedded` 已实现：其他 Java 程序可以 `EmbeddedInboxServer.start("app-a")` 一行启动独立 headless server，并拿到 apiUrl/mcpUrl/provisioner token/预配置 client。默认只绑回环地址。
 
 ### Phase 0：契约冻结
 

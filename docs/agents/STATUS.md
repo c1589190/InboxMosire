@@ -4,7 +4,7 @@
 - 分支：`main`
 - 版本：`0.1.0-SNAPSHOT`
 - 阶段：后端多程序接入 v2 完成；等待 `InboxMosire-DSH` 多 binding 升级
-- 最近代码提交：`ca3bba9 feat: 增加 advisory inbox 占用状态、HTTP/客户端/MCP 支持与测试`
+- 最近代码提交：`56df47a feat(embedded): 提供一行启动独立 InboxMosire server 的共享库`
 
 ## 已完成
 
@@ -14,6 +14,7 @@
   - `inbox-client`
   - `inbox-mcp-tools-client`
   - `inbox-server`
+  - `inbox-embedded`
 - 多 inbox：后端数据模型、MCP 参数、`PUT /v1/inboxes/{id}` 幂等 ensure。
 - Token 生命周期：
   - `items:write/read/manage`
@@ -55,7 +56,7 @@
 结果：
 
 - `BUILD SUCCESS`
-- Tests run: **28**，Failures 0, Errors 0, Skipped 0
+- Tests run: **30**，Failures 0, Errors 0, Skipped 0
 - Checkstyle：所有模块 0 violations
 - Maven install 成功，共享库已安装到 `~/.m2`
 - 真实 live 验证：
@@ -69,6 +70,13 @@
 - 共享库已安装到本地 Maven 仓库：
   - `io.mosire:inbox-client:0.1.0-SNAPSHOT`
   - `io.mosire:inbox-mcp-tools-client:0.1.0-SNAPSHOT`
+  - `io.mosire:inbox-embedded:0.1.0-SNAPSHOT`
+- `EmbeddedInboxServer.start("app-a")` 一行启动：
+  - 独立临时 SQLite；
+  - 随机回环 API/MCP 端口；
+  - 自动创建 inbox；
+  - 返回 apiUrl/mcpUrl/provisioner token/client；
+  - close 停止 server 并清理临时目录。
 - occupancy live 验证：
   - program token 占用 app-a 后 status 显示 occupied；
   - 另一个合法 status token 仍返回 200（advisory，不阻断）；

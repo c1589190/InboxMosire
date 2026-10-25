@@ -23,6 +23,21 @@ InboxMosire daemon
 Mode A 的核心：**raw token 留在程序进程/本机 secret store，目标会话只使用程序自己的 MCP 工具**。
 因此目标会话不应同时暴露中心 InboxMosire MCP；中心 MCP 是 lib/代理可用的通用面，不是 Mode A 的租户边界。
 
+## 1.1 程序内嵌 server（一行启动）
+
+如果其他程序不想预先部署 central daemon，可以直接依赖 `inbox-embedded`：
+
+```java
+try (EmbeddedInboxServer server = EmbeddedInboxServer.start("app-a")) {
+  URI apiUrl = server.apiUrl();
+  URI mcpUrl = server.mcpUrl();
+  String token = server.provisionerToken();
+  InboxClient client = server.client();
+}
+```
+
+详细规则见 [`embedded-server.md`](embedded-server.md)。embedded server 默认只绑回环地址，每个实例有独立 SQLite 和随机端口。
+
 ## 2. 程序侧一次 Provision
 
 ### 2.1 依赖
