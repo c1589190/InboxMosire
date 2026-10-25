@@ -70,6 +70,10 @@
 - 不同 session 可绑定不同 inbox；
 - 状态文件 v1 自动迁移到 v2；
 - 每个 binding 独立 SSE、cursor、revision watermark、wake 去重；
+- bind 成功后调用 `PUT /v1/inboxes/{inboxId}/occupancy`，body `{"occupiedBy":"<sessionRef>"}`；
+- unbind/session-stop/dispose 时调用 `DELETE /v1/inboxes/{inboxId}/occupancy`；
+- occupancy 只是 advisory 标记，不是访问锁；不能用它拒绝其他合法 token 持有者；
+- adapter wake token 需要 scope：`status:read`、`events:read`、`inbox:occupy`；
 - 旧 state 字段不允许让两个 session 串线。
 
 ## 4. BindingDescriptor
@@ -165,6 +169,7 @@ inbox={inboxId} revision={revision} available={available} channels=[{changedChan
 - `PUT /v1/inboxes/{inbox}`：幂等 ensure inbox。
 - `GET /v1/inboxes/{inbox}/status`：adapter 真相读取。
 - `GET /v1/inboxes/{inbox}/events`：SSE，支持 Last-Event-ID。
+- `GET/PUT/DELETE /v1/inboxes/{inbox}/occupancy`：advisory 占用标记。
 - Program MCP 通过 `inbox-client-java` 负责 list/claim/complete/push。
 - 管理面：
   - `POST /v1/admin/inboxes/{inbox}/credentials`
@@ -173,6 +178,7 @@ inbox={inboxId} revision={revision} available={available} channels=[{changedChan
   - `POST /v1/admin/credentials/{id}/revoke`
   - `GET /v1/admin/whoami`
 - raw token 只在 issue/rotate 返回一次；adapter 只使用 tokenRef 所指的本地 0600 secret。
+- occupancy 是 advisory 状态；daemon 启动时清空上一个进程留下的标记。
 
 ## 10. 当前 live 实例（2026-10-25）
 
@@ -222,9 +228,11 @@ DSH 的实现应直接读取这两个 descriptor，把 S1 绑到 app-a、S2 绑�
 注意事项：
 
 - tokenRef 文件权限为 `600`；不要把内容打印出来；
-- DSH adapter 只用这些 token 调 `status` + `events`；
+- DSH adapter 用这些 token 调 `status` + `events` + `occupancy`；
 - 目标 session 的 `inbox_list/claim/complete` 走程序自己的 MCP，不走中心 MCP；
-- app-a/app-b 各有一条 available 通知，可用于两个 session 的独立 wake 验收。
+- app-a/app-b 各有一条 available 通知，可用于两个 session 的独立 wake 验收；
+- 当前 occupancy 均未占用；DSH bind 成功后应 PUT occupancy，unbind 后 DELETE；
+- occupancy 是 advisory 提示，不会阻止其他合法 token 访问。
 
 ## 11. 验收（必须真跑）
 
@@ -239,7 +247,9 @@ DSH 的实现应直接读取这两个 descriptor，把 S1 绑到 app-a、S2 绑�
 9. tokenRef 不可读/非绝对路径 -> fail closed，不唤醒。
 10. 日志、adapter state、wake message、session transcript 不含 raw token。
 11. Mode A 下目标会话通过程序自己的 MCP 完成 claim/complete，DSH adapter 不调用任何 claim/complete 接口。
-12. 旧 v1 单 binding 数据可以迁移或明确报告不兼容，不得静默丢数据。
+12. bind 后 status/occupancy 显示 occupied=true / occupiedBy=session；unbind 后 occupied=false。
+13. occupancy=true 不阻断另一个合法 token 的访问；不得把 advisory occupancy 实现成服务端硬锁。
+14. 旧 v1 单 binding 数据可以迁移或明确报告不兼容，不得静默丢数据。
 
 ## 12. 交付报告
 
