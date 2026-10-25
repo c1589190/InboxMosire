@@ -39,6 +39,7 @@ java -jar inbox-server/target/inbox-server-0.1.0-SNAPSHOT-all.jar serve --data-d
 - [`docs/upstream/http-sse-contract.md`](docs/upstream/http-sse-contract.md)
 - [`docs/upstream/mcp-tools.md`](docs/upstream/mcp-tools.md)
 - [`docs/upstream/wake-adapter-contract.md`](docs/upstream/wake-adapter-contract.md)
+- [`docs/api/openapi.yaml`](docs/api/openapi.yaml)
 - [`docs/agents/STATUS.md`](docs/agents/STATUS.md)
 
 ## 安全基线

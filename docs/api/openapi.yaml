@@ -1,0 +1,368 @@
+openapi: 3.1.0
+info:
+  title: InboxMosire Producer / Adapter API
+  version: 0.1.0
+  description: |
+    Local-only notification board API. MCP is the Agent tool plane; this HTTP API is
+    for producers (push) and host adapters (status + SSE). The API binds to loopback only
+    in v1. All bearer tokens go in the Authorization header; never put a token in a URL.
+servers:
+  - url: http://127.0.0.1:18765
+    description: Local loopback API
+security:
+  - bearerAuth: []
+tags:
+  - name: Health
+  - name: Producer
+  - name: Adapter
+
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      security: []
+      operationId: healthz
+      responses:
+        '200':
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ok }
+                required: [status]
+
+  /readyz:
+    get:
+      tags: [Health]
+      security: []
+      operationId: readyz
+      responses:
+        '200':
+          description: Database is ready.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ready }
+                required: [status]
+        '503':
+          description: Database or default inbox not ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /v1/inboxes/{inbox}/items:
+    post:
+      tags: [Producer]
+      operationId: pushItem
+      summary: Push one notification into an inbox.
+      description: Requires bearer scope `items:write`. Token must also be scoped to the inbox and channel.
+      parameters:
+        - $ref: '#/components/parameters/Inbox'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PushItemRequest'
+            examples:
+              ticketReply:
+                value:
+                  channel: ticket
+                  kind: reply
+                  title: Ticket updated
+                  payload:
+                    id: ticket-42
+                    body: User-visible content lives here, never in SSE or wake messages.
+                  payloadRef: null
+                  dedupeKey: ticket-42:reply:7
+                  priority: 0
+      responses:
+        '201':
+          description: Item created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushItemResponse'
+        '200':
+          description: Deduplicated existing active item.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushItemResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          description: Body exceeds 1 MiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /v1/inboxes/{inbox}/status:
+    get:
+      tags: [Adapter]
+      operationId: getStatus
+      summary: Get the current board truth without item content.
+      description: Requires bearer scope `status:read`. Channel-scoped tokens see only their allowed channels.
+      parameters:
+        - $ref: '#/components/parameters/Inbox'
+        - name: channel
+          in: query
+          required: false
+          description: Repeat for multiple channels; comma-separated values are also accepted by the server.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+      responses:
+        '200':
+          description: Current board snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/inboxes/{inbox}/events:
+    get:
+      tags: [Adapter]
+      operationId: streamEvents
+      summary: Subscribe to board change events over SSE.
+      description: |
+        Requires bearer scope `events:read`. The response is `text/event-stream`.
+        Each event has an SSE `id:` equal to the durable event sequence and an
+        `event: inbox.changed` name. The `data:` line is a CloudEvents 1.0 JSON envelope.
+        Events contain counts and channel changes only: no title, payload, claim token,
+        or API token.
+
+        A client with no Last-Event-ID starts at the current event tip. Adapters should
+        fetch `/status` on startup and use this stream as an invalidation signal.
+        Reconnect with the last SSE id in the `Last-Event-ID` header to replay events.
+      parameters:
+        - $ref: '#/components/parameters/Inbox'
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema: { type: integer, minimum: 0, format: int64 }
+        - name: Accept
+          in: header
+          required: false
+          schema: { type: string, example: text/event-stream }
+      responses:
+        '200':
+          description: "SSE stream. Heartbeats are comment frames (`: ping`)."
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-cache }
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                changed:
+                  summary: CloudEvents 1.0 frame
+                  value: |
+                    id: 12
+                    event: inbox.changed
+                    data: {"specversion":"1.0","id":"evt_...","source":"urn:inboxmosire:inbox:main","type":"io.mosire.inbox.changed.v1","subject":"main","time":"2026-10-25T00:00:00Z","datacontenttype":"application/json","data":{"inbox":"main","revision":3,"available":1,"claimed":0,"channels":{"ticket":{"available":1,"claimed":0}},"changedChannels":["ticket"]}}
+
+        '400':
+          description: Invalid Last-Event-ID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '406':
+          description: Accept header does not allow text/event-stream.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Issued locally by `inboxd token issue`. Scopes:
+        `items:write`, `status:read`, `events:read`.
+        Tokens are shown once and stored only as SHA-256 hashes.
+
+  parameters:
+    Inbox:
+      name: inbox
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,64}$' }
+
+  responses:
+    BadRequest:
+      description: Malformed request.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Forbidden:
+      description: Token is valid but lacks scope/inbox/channel permission.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: Inbox or route not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Unprocessable:
+      description: Domain validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+  schemas:
+    PushItemRequest:
+      type: object
+      additionalProperties: false
+      required: [channel]
+      properties:
+        channel:
+          type: string
+          pattern: '^[A-Za-z0-9._-]{1,64}$'
+        kind:
+          type: string
+          pattern: '^[A-Za-z0-9._-]{1,64}$'
+          default: notification
+        title:
+          type: [string, 'null']
+          maxLength: 512
+          description: Optional human label. Present in inbox_list, but never in SSE or wake messages.
+        payload:
+          description: Opaque item content. Returned only to the Agent after MCP claim.
+        payloadRef:
+          type: [string, 'null']
+          maxLength: 2048
+        dedupeKey:
+          type: [string, 'null']
+          maxLength: 256
+          description: Deduplicates non-done items in the same inbox+channel.
+        priority:
+          type: integer
+          minimum: -1000
+          maximum: 1000
+          default: 0
+
+    PushItemResponse:
+      type: object
+      required: [itemId, duplicate, revision, createdAt]
+      properties:
+        itemId: { type: string }
+        duplicate: { type: boolean }
+        revision: { type: integer, format: int64 }
+        createdAt: { type: string, format: date-time }
+
+    ChannelCounts:
+      type: object
+      required: [available, claimed]
+      properties:
+        available: { type: integer, format: int64 }
+        claimed: { type: integer, format: int64 }
+
+    InboxStatus:
+      type: object
+      required: [inbox, revision, available, claimed, channels, updatedAt]
+      properties:
+        inbox: { type: string }
+        revision: { type: integer, format: int64 }
+        available: { type: integer, format: int64 }
+        claimed: { type: integer, format: int64 }
+        channels:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ChannelCounts'
+        updatedAt: { type: string, format: date-time }
+
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - INVALID_ARGUMENT
+                - INVALID_JSON
+                - INVALID_CURSOR
+                - UNAUTHORIZED
+                - FORBIDDEN
+                - NOT_FOUND
+                - METHOD_NOT_ALLOWED
+                - NOT_ACCEPTABLE
+                - PAYLOAD_TOO_LARGE
+                - UNSUPPORTED_MEDIA_TYPE
+                - INTERNAL
+            message: { type: string }
+
+    CloudEventInboxChanged:
+      type: object
+      required: [specversion, id, source, type, subject, time, datacontenttype, data]
+      properties:
+        specversion: { type: string, const: '1.0' }
+        id: { type: string }
+        source: { type: string, example: 'urn:inboxmosire:inbox:main' }
+        type: { type: string, const: 'io.mosire.inbox.changed.v1' }
+        subject: { type: string }
+        time: { type: string, format: date-time }
+        datacontenttype: { type: string, const: application/json }
+        data:
+          type: object
+          required: [inbox, revision, available, claimed, channels, changedChannels]
+          properties:
+            inbox: { type: string }
+            revision: { type: integer, format: int64 }
+            available: { type: integer, format: int64 }
+            claimed: { type: integer, format: int64 }
+            channels:
+              type: object
+              additionalProperties:
+                $ref: '#/components/schemas/ChannelCounts'
+            changedChannels:
+              type: array
+              items: { type: string }
