@@ -1,176 +1,213 @@
-# 开发计划：多程序接入、共享客户端库与 Token 管理
+# 开发计划：多程序接入、动态 Inbox 绑定与 Token 分发
 
 > 日期：2026-10-25  
-> 状态：待用户确认后实施  
-> 关联架构：`设计-服务端架构.md`、`docs/api/openapi.yaml`、`docs/upstream/DSH-HANDOFF.md`
+> 状态：Plan v2，待最后确认后实施  
+> 关联：`设计-服务端架构.md`、`docs/api/openapi.yaml`、`docs/upstream/DSH-HANDOFF.md`
 >
-> 用户原话：
-> - “1 支持”
-> - “4 B！共享出去的lib要支持获取、查看token，因为其他程序也会自己提供MCP，方便查看”
-> - “出开发计划先”
+> 用户追加确认（原话）：
+> - “1 一个dsh按需在不同会话绑定不同inbox”
+> - “2 应该是，但是inbox-client-java要有能力拿到，我预想的工作流是拿到了这个jar插件的程序自己拿到inbox id和token，然后用自己的mcp工具返回给目标会话，目标会话自己连inbox”
 
-## 1. 目标与主路径
-
-主路径采用 **方案 B：一个程序一个 inbox，Agent/DSH 按需绑定**；同时保留方案 A 的共享 inbox + channel 能力。
+## 1. 最终目标形态
 
 ```text
-程序 A ── inbox-client-java ──► inbox app-a ── DSH adapter row A ── Agent session A
-程序 B ── inbox-client-java ──► inbox app-b ── DSH adapter row B ── Agent session B
-程序 C ── HTTP/OpenAPI ───────► inbox app-c ── DSH adapter row C ── Agent session C
-                                      │
-                                      └── 同一个 inboxd daemon + 同一个 SQLite/MCP
+程序 A（嵌入 inbox-client-java）
+  │ 1. ensure inbox app-a
+  │ 2. 获取 app-a 的 inbox id + 受限 token
+  │ 3. 通过自己的 MCP 工具把 ConnectionDescriptor 返回给目标会话
+  ▼
+目标会话
+  │ 4. 用自己的 MCP/HTTP 连接能力连接 inbox app-a
+  ▼
+InboxMosire daemon（多 inbox、单状态源）
+  ▲
+  │ SSE + status
+  │
+DSH host（单个 DSH 进程内按 session 管理多个 binding）
+  └── session S1 ↔ inbox app-a
+      session S2 ↔ inbox app-b
+      session S3 ↔ inbox app-c
 ```
 
-### 1.1 明确不做
+关键变化：
 
-- 不把整个 `inbox-server` / SQLite / MCP server 作为 lib 嵌入每一个程序。
-- 不让程序直接打开 InboxMosire SQLite。
-- 不让 DSH adapter 修改通知板状态；它仍然只做 SSE + session binding + followup。
-- 不允许普通 producer token 创建任意 inbox。
-- 不允许 MCP 工具返回 API token 原文。
+1. **DSH 不再按“一个 adapter row 一个 inbox”作为主路径**；DSH adapter 要在宿主内维护 `sessionRef -> binding` 映射，按需为不同会话绑定不同 inbox。
+2. **`inbox-client-java` 是真正的共享客户端库**；调用方程序能拿到 inbox id 和受限 token，并决定是否通过自己的 MCP 工具交给目标会话。
+3. 核心后端仍是唯一状态源；程序不直接碰 SQLite、不启动第二套 inbox server。
 
-## 2. 需要新增的层次
+---
+
+## 2. 两个连接模式
+
+用户描述的工作流要支持，但必须区分“目标会话怎么连”：
+
+### 模式 A：目标会话使用程序自己的 MCP（推荐默认）
 
 ```text
-                    ┌─────────────────────────────┐
-                    │ inboxd（唯一状态源）         │
-                    │ HTTP/SSE + MCP + SQLite     │
-                    └─────────────┬───────────────┘
-                                  │
-             ┌────────────────────┼────────────────────┐
-             ▼                    ▼                    ▼
-     inbox-client-java      inbox-mcp-tools       DSH adapter
-     （普通程序）            （其他程序的 MCP）    （读 SSE + wake）
+程序 MCP 工具 -> inbox-client-java -> InboxMosire HTTP
 ```
 
-### 2.1 `inbox-client-java`
+- token 留在程序进程内；
+- 目标会话只拿到 `inboxId` 或一个短连接句柄；
+- 不需要改 InboxMosire MCP 鉴权；
+- 适合程序自己的业务工具和 inbox 查看工具在同一个 MCP server 里。
 
-新的共享 Java 客户端库，不含服务端实现。
-
-建议 Maven 坐标：
+### 模式 B：目标会话直接连 InboxMosire MCP（用户描述的目标）
 
 ```text
-io.mosire:inbox-client:0.2.0
+程序 MCP 工具 -> 返回 ConnectionDescriptor
+目标会话 -> 自带 Bearer token 连接 InboxMosire MCP/HTTP
 ```
 
-能力：
+需要新增后端能力：
 
-- `ensureInbox`
-- `push`
-- `status`
-- `list`
-- `claim`
-- `complete`
-- `release`
-- `renew`
-- `streamEvents`
-- token 管理：`issue`、`list`、`rotate`、`revoke`、`whoAmI`
-- 本地 `TokenStore`：环境变量、文件、显式字符串三种来源
-- 统一错误码、重试、JSON DTO
+- MCP HTTP endpoint 支持 `Authorization: Bearer`；
+- token 绑定 inbox（目标会话不能借 token 访问其它 inbox）；
+- 动态 MCP 连接必须由目标宿主支持；如果 DSH 不能从工具结果动态注册 MCP server，则模式 B 在 DSH 侧必须由 adapter/用户配置承担，不能假装已实现。
 
-不包含：
+**计划同时覆盖 A 和 B；B 是显式目标，但会先做宿主能力探测。**
 
-- SQLite
-- JDK HttpServer
-- InboxService
-- AgentLib 服务端
-- DSH 宿主代码
+---
 
-### 2.2 `inbox-mcp-tools-client`
+## 3. `inbox-client-java` 必须提供的能力
 
-可选 Maven 模块，供“其他程序自己提供 MCP”使用。
+### 3.1 客户端 API
 
-它把 `inbox-client-java` 包装成 AgentLib `AgentTool` 集合，可注册进程序自己的 `ToolRegistry` / `AgentToMcpServer`。
+```java
+InboxClient client = InboxClient.builder()
+    .baseUrl(URI.create("http://127.0.0.1:18765"))
+    .credentialSource(CredentialSource.file(Path.of("program.token")))
+    .build();
 
-安全边界：
+// 创建/确保 inbox
+InboxDescriptor inbox = client.admin().ensureInbox("app-a", "程序 A");
 
-- 暴露 `inbox_status/list/claim/complete/release/renew/push`；
-- 不暴露 admin/token 签发/raw token 工具；
-- 可暴露 `inbox_credential_info`，但只返回 metadata（id/label/scopes/inbox/channels/fingerprint），不返回原文。
+// 为目标会话签发受限连接凭据
+IssuedCredential issued = client.admin().issueCredential(
+    IssueCredentialRequest.builder("app-a")
+        .label("session-S1")
+        .scope("status:read")
+        .scope("events:read")
+        .scope("mcp:connect")
+        .expiresIn(Duration.ofHours(8))
+        .build());
 
-## 3. 多 Inbox 与绑定能力
+// 目标会话使用
+ConnectionDescriptor connection = issued.connectionDescriptor(); // 含 inboxId, mcpUrl, token
+```
 
-### 3.1 后端
+### 3.2 ConnectionDescriptor
 
-现状已经支持多 inbox：
+```json
+{
+  "inboxId": "app-a",
+  "apiBaseUrl": "http://127.0.0.1:18765",
+  "mcpUrl": "http://127.0.0.1:18766/mcp",
+  "token": "inbox_...",
+  "scopes": ["status:read", "events:read", "mcp:connect"],
+  "expiresAt": "2026-10-25T08:00:00Z"
+}
+```
 
-- `inbox` 表按 id 区分；
-- item/claim/event 全部带 `inbox_id`；
-- MCP 工具接受可选 `inbox` 参数；
-- live 实例已有 `main`、`smoke`。
+- 允许调用方程序读取 token 原文并放入自己的 MCP 工具返回；
+- token 只能是“连接凭据”，不能是 admin/provisioner credential；
+- 建议短 TTL，绑定单 inbox，可轮换/撤销；
+- 程序应把 token 写入自己的本机 secret store，不写日志。
 
-本计划补齐**运行时创建 inbox**和**多 inbox 运维面**，但继续保持单 daemon、单 SQLite owner。
+### 3.3 本地 TokenStore
 
-### 3.2 DSH adapter
+```java
+TokenStore store = TokenStore.file(Path.of("/home/.../app-a-session.token"));
+store.writeAtomic(token, PosixFilePermissions.fromString("rw-------"));
+String token = store.read();
+TokenMetadata info = client.credentials().whoAmI();
+```
 
-当前 DSH adapter 语义：
+- 程序能“拿到/查看”自己的 token；
+- 服务端只返回一次原文；
+- 服务端 metadata 列表不含原文；
+- MCP 工具可以由调用方程序选择是否返回原文，但默认应为短 TTL 连接 token，并明确它已进入模型/session 上下文。
+
+---
+
+## 4. DSH 多会话多 inbox 绑定
+
+### 4.1 目标
+
+一个 DSH host 进程支持：
 
 ```text
-1 adapter instance = 1 inbox + 1 binding + 1 stateFile
+bindings = {
+  "session-1": { inboxId: "app-a", cursor, revision, tokenRef },
+  "session-2": { inboxId: "app-b", cursor, revision, tokenRef },
+  "session-3": { inboxId: "app-c", cursor, revision, tokenRef }
+}
 ```
 
-因此方案 B 的落地方式：
+同一个 DSH 会话默认只绑定一个 inbox；重新 bind 即替换该会话的 binding。不同会话可绑定不同 inbox。
 
-- 每个 inbox 一个 adapter row；
-- 每 row 配置不同 `inboxId`、`stateFile`、`tokenFile`；
-- 同一个 DSH session 若同时消费多个 inbox，需要多个 adapter row，会产生多次 followup。
+### 4.2 DSH adapter 需要改造
 
-本计划不要求马上改 DSH adapter 成多 binding。  
-先支持并文档化“一 inbox 一 adapter row”，完成多程序独立投递与独立 Agent 消费。
+在 `InboxMosire-DSH`（不是 Java 后端）中：
 
-未来若要“一个 DSH session 同时绑定多个 inbox”，另开设计：多 binding、每 binding 独立 SSE、session 级 wake 合并。
+- 状态文件从单一 binding 迁移为 `bindings` map；
+- 每个 binding 拥有独立 SSE、cursor、revision watermark、token reference；
+- `bind(sessionRef, inboxId, credentialRef/token)`：
+  - 停止该 session 旧 binding；
+  - 写入新 binding；
+  - 先读 status，再连 SSE；
+- `unbind(sessionRef)` 只影响目标 session；
+- `agent/disposed`、`session-stop`、workspace archive 清理该 session binding；
+- 每个 session 的 wake 去重独立；
+- 不允许把同一 SSE 事件投递给错误 session；
+- state file 必须按 binding 保持原子更新。
 
-### 3.3 两种可用拓扑
+### 4.3 工具面变更
 
-- **B（主路径）**：一程序一 inbox，一 adapter row 一 inbox 一 session。
-- **A（仍支持）**：多个程序共享一个 inbox，用 channel 区分；只需要一个有界 adapter。
+现有：
 
-## 4. Token 生命周期与安全
+```text
+inbox_adapter_bind({ sessionId? })
+```
 
-### 4.1 原则
+需要扩展为：
 
-1. token 原文**只在签发/轮换时返回一次**。
-2. 服务端只保存 token 的 SHA-256 hash 和 fingerprint。
-3. MCP 永远不返回 token 原文。
-4. 普通 producer/adapter token 不得签发 token 或创建任意 inbox。
-5. 所有 token 管理操作写审计日志（不含 token 原文）。
-6. 日志、SSE、wake 消息、MCP tool result 中不出现 token 原文。
+```text
+inbox_adapter_bind({
+  sessionId?,        // 默认调用者
+  inboxId,           // 必填
+  token?,            // 连接 token；也可用 tokenRef
+  channels?,
+  tokenRef?          // 推荐：程序把 token 写本地 secret 后只传引用
+})
+```
 
-### 4.2 “获取/查看 token”的落地
+安全要求：
 
-共享 lib 支持两种“查看”：
+- token 不写普通日志；
+- token 不进入 adapter state 原文；state 存 tokenRef 或加密后的 secret ref；
+- token 原文如果按用户工作流通过 MCP 工具传入，会进入该会话 transcript，这是已知代价；默认推荐 `tokenRef`，或把 token 作为短 TTL 连接凭据。
+- 绑定成功后只唤醒该 session；失败不 fallback 到其它 session。
 
-- **程序本地 TokenStore**：签发后由客户端写入本机 0600 secret 文件，程序可读取、使用、查看自己的 token；
-- **服务端 metadata**：通过 `whoAmI` / credential list 查看 `id/label/scopes/inbox/channels/fingerprint/lastUsedAt`，但不能反查原文。
+---
 
-不默认实现“服务端重新显示 token 原文”。如果以后确实需要，必须单独设计：
-
-- 使用本地 master key 加密 token 后落库；
-- 显式 admin 解锁；
-- 每次 reveal 写审计；
-- 风险与轮换机制单独评审。
-
-## 5. API 增量
+## 5. 后端 API 增量
 
 ### 5.1 Inbox ensure
 
 ```http
 PUT /v1/inboxes/{inbox}
-Authorization: Bearer <bootstrap-or-admin-token>
+Authorization: Bearer <provisioner-or-admin-token>
 Content-Type: application/json
 
 {"ownerLabel":"app-a"}
 ```
 
-语义：
+- 幂等创建；
+- 普通精确绑定 token 只能 ensure 自己的 inbox；
+- 通配/任意创建仅 admin 凭据允许。
 
-- 幂等；不存在则创建，存在则返回 200；
-- 新创建返回 201；
-- 需要 `inbox:ensure` 或 admin scope；
-- 普通 producer token 只有在 **精确绑定** 到该 inbox 时才能 ensure 自己的 inbox；
-- `*` inbox 的普通 token 不允许通过 ensure 创建任意 inbox。
-
-### 5.2 Token 管理
+### 5.2 Credential 管理
 
 ```http
 POST /v1/admin/inboxes/{inbox}/credentials
@@ -180,255 +217,193 @@ POST /v1/admin/credentials/{id}/revoke
 GET  /v1/admin/whoami
 ```
 
-签发请求：
-
-```json
-{
-  "label": "dsh-adapter-app-a",
-  "scopes": ["status:read", "events:read"],
-  "channels": []
-}
-```
-
-响应只在这里返回原文一次：
+签发返回原文一次：
 
 ```json
 {
   "credential": {
     "id": "cred_...",
-    "label": "dsh-adapter-app-a",
-    "scopes": ["status:read", "events:read"],
+    "label": "session-S1",
+    "scopes": ["status:read", "events:read", "mcp:connect"],
     "inbox": "app-a",
     "channels": [],
-    "fingerprint": "sha256:ab12…",
+    "fingerprint": "sha256:ab12...",
+    "expiresAt": "...",
     "createdAt": "..."
   },
   "token": "inbox_..."
 }
 ```
 
-管理 scope：
+### 5.3 MCP 鉴权（模式 B 必需）
 
-- `admin:credentials` 才能签发任意 inbox 的 token；
-- `credentials:issue:self` 只能为绑定 inbox 签发 scope 不超过自身的 token；
-- `whoami` 允许任何合法凭据调用，返回自身 metadata。
+目标会话要直接连 InboxMosire MCP，需要新增：
 
-### 5.3 Inbox 列表/状态
+- MCP HTTP transport 读取 `Authorization: Bearer`；
+- token -> credential -> inbox 绑定；
+- 工具执行上下文只能访问该 inbox；
+- 工具参数中的 `inbox` 若出现，必须等于 token 绑定 inbox，否则拒绝；
+- `inbox_push` 也需要按 token scope 限制；
+- MCP 面不暴露 token/admin 工具。
 
-```http
-GET /v1/admin/inboxes
-GET /v1/inboxes/{inbox}/status
-```
+**技术门槛**：AgentLib 当前 `AgentToMcpServer.startHttp` 没有 HTTP header 鉴权注入。需要先评估两条路：
 
-Admin inbox 列表返回 metadata，不返回 item 内容。
+1. 给 AgentLib 增加 `McpHttpCallerResolver`（推荐，通用）；
+2. 在 InboxMosire 侧做认证网关/每 inbox 子 MCP server（更重，尽量避免）。
+
+这一项单独作为 Phase 3 门禁；不确认宿主/AgentLib 能承载前，不宣称模式 B 已可用。
+
+---
 
 ## 6. 数据模型变更
 
-`api_credential` 增量字段：
-
-- `fingerprint`：token hash 的短前缀，用于人眼识别；
-- `last_used_at`：最近认证时间，按节流写；
-- `rotated_from`：轮换来源；
-- `created_by`：签发者 credential id 或 CLI；
-- `revoked_at` 继续保留。
-
-`inbox` 增量字段：
+`inbox`：
 
 - `owner_label`
 - `created_by`
-- `updated_at` 已有
-- 可选 `archived_at`（后续阶段）
+- 可选 `archived_at`
 
-新 migration version：`2`。
+`api_credential`：
 
-兼容性：
+- `label`
+- `scopes`
+- `inbox_id`
+- `channels`
+- `token_hash`
+- `fingerprint`
+- `expires_at`
+- `last_used_at`
+- `rotated_from`
+- `revoked_at`
+- `created_by`
 
-- 现有 token 继续有效；
-- 旧 `main`/`smoke` 自动补齐 metadata；
-- `inbox` 默认 main 不变；
-- OpenAPI 只增不改。
+要求：
 
-## 7. 客户端库设计
+- 只有 `token_hash`，默认不存 token 原文；
+- `ConnectionDescriptor.token` 只在 issue/rotate 响应中出现一次；
+- 程序本地 TokenStore 负责后续持久化；
+- 日志/SSE/wake/MCP metadata 不显示 hash 之外更敏感内容（fingerprint 可显示）。
 
-### 7.1 基础 API
+Migration version：`2`，旧 `main` / `smoke` / 现有 credential 自动兼容。
 
-```java
-try (InboxClient client = InboxClient.builder()
-        .baseUrl(URI.create("http://127.0.0.1:18765"))
-        .tokenSource(TokenSource.file(Path.of(".../app-a.token")))
-        .build()) {
+---
 
-  client.inboxes().ensure("app-a", "程序 A");
+## 7. 分阶段实施
 
-  client.items().push(
-      PushItem.builder("app-a")
-          .channel("ticket")
-          .kind("reply")
-          .title("工单更新")
-          .payload(Map.of("id", "t-42"))
-          .dedupeKey("ticket:t-42")
-          .build());
+### Phase 0：契约与宿主能力探测
 
-  InboxStatus status = client.inboxes().status("app-a");
-}
-```
+- 冻结 `ConnectionDescriptor`、`InboxDescriptor`、credential scopes、错误码。
+- 探明 DSH 是否能从工具结果动态注册/连接 MCP；如果不能，模式 B 在 DSH 侧走 adapter 受控连接。
+- 更新 OpenAPI 与 DSH 多 binding 设计。
 
-### 7.2 TokenStore
+验收：设计文档落盘，token 生命周期无歧义。
 
-```java
-TokenStore store = TokenStore.file(Path.of(".../secrets/app-a.token"));
-String token = store.read();
-store.writeAtomically(token, 0600);
-CredentialView info = client.tokens().whoAmI();
-```
-
-- `read()` / `writeAtomically()` / `delete()` 只在客户端本地。
-- `TokenStore` 不把 token 打印到日志。
-- CLI/程序可以通过显式本地命令查看自己的 token 文件；MCP 调用不允许读取该文件。
-
-### 7.3 事件流
-
-客户端提供：
-
-```java
-client.events().stream("app-a", cursor, event -> { ... });
-```
-
-底层仍是 SSE + `Last-Event-ID`，供程序自建 MCP/Agent 或自建观察面使用。
-
-## 8. 其他程序自己提供 MCP
-
-新增可选模块 `inbox-mcp-tools-client`，依赖：
-
-```text
-inbox-client-java
-agentlib-mosire
-```
-
-程序可以：
-
-```java
-InboxMcpTools tools = InboxMcpTools.forClient(client);
-ToolRegistry registry = new ToolRegistry();
-registry.registerAll(tools.list());
-
-AgentToMcpServer.startHttp(..., registry, ..., authorizer);
-```
-
-这样程序自己的 MCP 可以同时提供：
-
-- 本程序的业务工具；
-- inbox 查看/claim/complete 工具；
-- 可选的 inbox credential metadata 查看工具。
-
-但：
-
-- token 管理仍是本地 admin API 操作；
-- MCP 只提供 metadata，不提供原文 token；
-- 若程序要打印 token，由本地运维 CLI 完成，不交给模型。
-
-## 9. 阶段计划
-
-### Phase 0：冻结契约
-
-产出：
-
-- 更新 `设计-服务端架构.md`（多 inbox + token lifecycle）；
-- 更新 OpenAPI；
-- 更新 `docs/upstream/mcp-tools.md`；
-- 明确 `inbox-client` 与 `inbox-mcp-tools-client` 的模块边界。
-
-验收：
-
-- 设计评审通过；
-- token 原文不可经 MCP/SSE/日志获取的红线写入文档。
-
-### Phase 1：服务端 admin/ensure API
+### Phase 1：服务端 provisioning / credential API
 
 - `PUT /v1/inboxes/{id}`
-- credential issue/list/rotate/revoke/whoAmI
-- scope 校验、精确 inbox 限制、audit
-- schema migration v2
+- credential issue/list/rotate/revoke/whoami
+- scope：`inbox:ensure`、`credentials:issue:self`、admin 级 credential scope
+- migration v2、审计、token 过期
 
 验收：
 
-- 幂等 ensure；
-- 普通 token 不能越权创建别的 inbox；
-- token 只返回一次；
-- rotate 后旧 token 失效；
-- 不破坏现有 push/status/SSE。
+- 程序能创建自己的 inbox；
+- token 原文只在 issue/rotate 出现一次；
+- 精确 inbox token 不能创建/访问别的 inbox；
+- 轮换后旧 token 401。
 
 ### Phase 2：`inbox-client-java`
 
-- `InboxClient`
-- `InboxAdminClient`
+- HTTP client
+- admin/provisioner API
+- producer API
+- reader/SSE API
 - `TokenStore`
-- HTTP 错误映射、重试、幂等
-- 单元/集成测试
+- `ConnectionDescriptor`
+- 测试
 
 验收：
 
-- 程序用 lib ensure -> push -> status；
-- token 保存到 0600 文件；
-- lib 能读取自己的 token 并展示 metadata；
-- 不依赖服务端模块。
+- 一个外部 Java 程序可以 ensure -> issue -> push -> status；
+- client 能拿到 token 并写入 0600 secret；
+- client 不依赖 `inbox-server`/SQLite/AgentLib 服务端。
 
-### Phase 3：`inbox-mcp-tools-client`
+### Phase 3：MCP 直连认证（模式 B 门禁）
 
-- 网络版 AgentTool 集合
-- 与 AgentLib MCP server 真连接测试
-- 排除 token 管理工具与原文
-
-验收：
-
-- 程序自己的 MCP 可列出 inbox 工具；
-- claim/complete 经网络调用真实 daemon；
-- MCP result 不含 raw token。
-
-### Phase 4：方案 B 端到端
-
-- 程序 A 创 app-a、拿 producer token，push
-- 为 app-a 签发 adapter token
-- DSH 第二个 adapter row 绑定 app-a 与 session A
-- 程序 B/app-b/session B 并行验证
-- 两个 inbox 状态不串
+- 评估/实现 AgentLib MCP bearer 解析或认证网关；
+- token 绑定 inbox；
+- 工具面 inbox 强制收窄；
+- MCP 不返回 token 原文。
 
 验收：
 
-- A 的消息只唤醒 session A；
-- B 的消息只唤醒 session B；
-- 同一 item 不会被两个 session 同时 claim；
-- archived session 不唤醒；
-- 日志/SSE/wake/privacy 扫描通过。
+- 目标会话用 ConnectionDescriptor 直连 MCP；
+- 只能看到/操作 token 绑定的 inbox；
+- 伪造 inbox 参数被拒；
+- 未带 token 401。
 
-### Phase 5：文档与兼容
+### Phase 4：DSH 多 binding
 
-- 多 adapter row 操作手册；
-- token 轮换手册；
-- OpenAPI/生成客户端；
-- 升级说明；
-- 版本发布。
+在 `InboxMosire-DSH`：
 
-## 10. 硬验收清单
+- 单进程多 session binding；
+- 每 session 独立 SSE；
+- bind/unbind 按 session；
+- tokenRef/secret 管理；
+- archive/resume 清理；
+- 单 session 依然只绑一个 inbox，重新 bind 替换。
 
-1. 程序 A 可以通过 client lib 幂等 ensure `app-a`。
-2. 程序 A 不能访问/创建 `app-b`。
-3. token 签发只显示一次；list/whoAmI 只有 metadata。
-4. MCP 不返回 token 原文。
-5. 程序 A push → app-a revision/status 正确。
-6. DSH session A 只绑定 app-a，不被 app-b 唤醒。
-7. 多个 inbox 的 event seq、revision、claim 完全隔离。
-8. 轮换 adapter token 后，旧 token 401，新 token 生效。
-9. 重启 daemon 后 inbox/credential/metadata 保持。
-10. SSE Last-Event-ID、keepalive、断线重连保持。
-11. 日志/SSE/wake 消息/会话 transcript 无 token 原文。
-12. 其他程序自己 MCP 的 inbox 工具有真实 HTTP 调用证据。
+验收：
 
-## 11. 仍需用户确认的一个安全点
+- S1→app-a、S2→app-b 同时运行；
+- app-a 事件只唤醒 S1；
+- app-b 事件只唤醒 S2；
+- S1 归档后不唤醒；
+- S1 重启/重连恢复自己的 cursor；
+- 一个 inbox 的 revision 不串到另一个 session。
 
-“查看 token”有两种实现：
+### Phase 5：程序自有 MCP 工具包（模式 A）
 
-- **推荐**：lib 在签发时把 token 原文写入本机 0600 secret store，之后程序可读取；服务端只能查看 metadata/fingerprint，不能重新显示原文；
-- **高风险可选**：服务端加密保存 token 原文，admin 可显式 reveal，并写审计。
+- `inbox-mcp-tools-client`：网络版 AgentTool：
+  - `inbox_status/list/claim/complete/release/renew/push`
+  - 可选 `inbox_credential_info`（仅 metadata）
+- 注册进程序自己的 AgentLib MCP server。
 
-本计划默认采用第一种。若要求“换机器后仍能从服务端重新查看 token 原文”，需要追加第二阶段设计。
+验收：
+
+- 程序自己 MCP 可展示/操作 inbox；
+- 原文 token 不出现在 MCP tool result；
+- claim/complete 经真实 HTTP 到 daemon。
+
+### Phase 6：端到端与发布
+
+- 两个程序、两个 inbox、两个 DSH session；
+- 程序 A MCP 返回连接描述 → session S1 连接 app-a；
+- 程序 B 返回连接描述 → session S2 连接 app-b；
+- push/claim/complete/rotate/archive/restart 全流程；
+- 隐私扫描、文档、OpenAPI、client release。
+
+---
+
+## 8. 硬验收
+
+1. 一个 DSH host 同时绑定 S1→app-a、S2→app-b，互不串线。
+2. `inbox-client-java` 能从服务端获取 inbox id 和一次性 token，并写入本地 secret。
+3. 程序 MCP 工具返回的 ConnectionDescriptor 可供目标会话使用；原文 token 不写日志。
+4. 目标会话只得到自己的 inbox 能力，不能通过参数越权访问别的 inbox。
+5. token 轮换后旧 SSE/MCP connection 必须失效或明确重连失败。
+6. session archive 后该 binding 停止，其他 session 不受影响。
+7. 重启 daemon 后 inbox、token metadata、cursor、binding 恢复。
+8. 所有日志/SSE/wake/transcript 扫描无 token 原文泄露。
+9. 旧单 binding adapter 和旧 main/smoke 配置不破坏，可迁移。
+
+---
+
+## 9. 仍需确认的一点
+
+“目标会话自己连 inbox”的技术落点需要锁定：
+
+- **模式 A（程序自有 MCP proxy）**：最容易，不需要 MCP 鉴权改造；目标会话只调用程序 MCP 工具。
+- **模式 B（目标会话直连 InboxMosire MCP）**：需要 MCP Bearer 鉴权 + DSH/宿主支持动态 MCP 连接；工作量和宿主能力风险都更高。
+
+计划已同时写入两种模式；Phase 3 是模式 B 的前置门禁。没有该门禁通过，就不能对外宣称“目标会话拿到 token 后可直接连 InboxMosire MCP”。
