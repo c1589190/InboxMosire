@@ -4,6 +4,8 @@ import java.util.Objects;
 
 /** 稳定的领域错误。HTTP/MCP 适配层只按 {@link Code} 映射，不解析中文文案。 */
 public final class InboxException extends RuntimeException {
+  private static final long serialVersionUID = 1L;
+
   public enum Code {
     INVALID_ARGUMENT,
     NOT_FOUND,

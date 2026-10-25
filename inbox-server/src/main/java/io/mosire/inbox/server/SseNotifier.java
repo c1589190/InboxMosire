@@ -2,7 +2,6 @@ package io.mosire.inbox.server;
 
 import io.mosire.inbox.core.InboxChangeNotifier;
 import java.time.Duration;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 

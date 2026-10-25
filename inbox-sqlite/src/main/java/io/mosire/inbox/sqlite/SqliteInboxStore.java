@@ -11,7 +11,6 @@ import io.mosire.inbox.core.CompleteResult;
 import io.mosire.inbox.core.Completion;
 import io.mosire.inbox.core.CompletionAck;
 import io.mosire.inbox.core.CompletionOutcome;
-import io.mosire.inbox.core.InboxException;
 import io.mosire.inbox.core.InboxStatus;
 import io.mosire.inbox.core.InboxStore;
 import io.mosire.inbox.core.ItemSummary;
