@@ -19,6 +19,7 @@
     <module>inbox-client</module>
     <module>inbox-mcp-tools-client</module>
     <module>inbox-server</module>
+    <module>inbox-embedded</module>
   </modules>
 
   <properties>
