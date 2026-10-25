@@ -185,6 +185,37 @@ class InboxHttpServerTest {
         .isGreaterThan(event.get("data").get("revision").asLong());
   }
 
+
+  @Test
+  void channelScopedAdapterNeverSeesOtherChannels() throws Exception {
+    HttpRequest streamRequest =
+        HttpRequest.newBuilder(URI.create(apiBase + "/events"))
+            .header("Authorization", "Bearer " + ticketOnlyToken)
+            .header("Accept", "text/event-stream")
+            .GET()
+            .build();
+    HttpResponse<InputStream> stream =
+        client.send(streamRequest, HttpResponse.BodyHandlers.ofInputStream());
+    assertThat(stream.statusCode()).isEqualTo(200);
+    CompletableFuture<String> frameFuture =
+        CompletableFuture.supplyAsync(() -> readFrame(stream.body()));
+
+    client.send(
+        pushRequest("{\"channel\":\"tweet\",\"kind\":\"review\",\"title\":\"hidden\"}"),
+        HttpResponse.BodyHandlers.ofString());
+    client.send(
+        pushRequest("{\"channel\":\"ticket\",\"kind\":\"reply\",\"title\":\"visible\"}"),
+        HttpResponse.BodyHandlers.ofString());
+
+    String frame = frameFuture.get(5, TimeUnit.SECONDS);
+    stream.body().close();
+    JsonNode event = eventFromFrame(frame);
+    assertThat(event.get("data").get("changedChannels").toString()).contains("ticket").doesNotContain("tweet");
+    assertThat(event.get("data").get("channels").has("ticket")).isTrue();
+    assertThat(event.get("data").get("channels").has("tweet")).isFalse();
+    assertThat(frame).doesNotContain("hidden");
+  }
+
   private HttpRequest pushRequest(String body) {
     return HttpRequest.newBuilder(URI.create(apiBase + "/items"))
         .header("Authorization", "Bearer " + producerToken)

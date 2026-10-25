@@ -96,7 +96,6 @@ public final class InboxService {
     requireId("inbox", inboxId);
     List<String> tokens = normalizeTokens(claimTokens);
     Duration safeLease = normalizeLease(lease);
-    sweepExpired();
     return store.renew(inboxId, tokens, safeLease, clock.instant());
   }
 
@@ -114,7 +113,6 @@ public final class InboxService {
       requireText("summary", completion.summary(), 4096, false);
       normalized.add(completion);
     }
-    sweepExpired();
     CompleteResult result = store.complete(inboxId, List.copyOf(normalized), clock.instant());
     if (result.completed().stream().anyMatch(ack -> !ack.idempotent())) {
       notifier.changed();
@@ -125,7 +123,6 @@ public final class InboxService {
   public ReleaseResult release(String inboxId, List<String> claimTokens) {
     requireId("inbox", inboxId);
     List<String> tokens = normalizeTokens(claimTokens);
-    sweepExpired();
     ReleaseResult result = store.release(inboxId, tokens, clock.instant());
     if (!result.releasedItemIds().isEmpty()) {
       notifier.changed();

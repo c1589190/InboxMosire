@@ -55,7 +55,7 @@ class InboxMcpServerTest {
 
         McpSchema.CallToolResult pushed =
             client.callTool(
-                new McpSchema.CallToolRequest(
+                call(
                     "inbox_push",
                     Map.of(
                         "channel", "ticket",
@@ -69,14 +69,14 @@ class InboxMcpServerTest {
         String itemId = push.get("itemId").asText();
 
         McpSchema.CallToolResult listed =
-            client.callTool(new McpSchema.CallToolRequest("inbox_list", Map.of()));
+            client.callTool(call("inbox_list", Map.of()));
         JsonNode list = json(listed);
         assertThat(list.get("count").asInt()).isEqualTo(1);
         assertThat(list.toString()).doesNotContain("payload-secret");
 
         McpSchema.CallToolResult claimed =
             client.callTool(
-                new McpSchema.CallToolRequest(
+                call(
                     "inbox_claim", Map.of("itemIds", List.of(itemId), "leaseSeconds", 60)));
         JsonNode claim = json(claimed);
         assertThat(claim.get("claimed")).hasSize(1);
@@ -86,7 +86,7 @@ class InboxMcpServerTest {
 
         McpSchema.CallToolResult completed =
             client.callTool(
-                new McpSchema.CallToolRequest(
+                call(
                     "inbox_complete",
                     Map.of(
                         "completions",
@@ -103,7 +103,7 @@ class InboxMcpServerTest {
         assertThat(complete.get("completed").get(0).get("idempotent").asBoolean()).isFalse();
 
         McpSchema.CallToolResult bad =
-            client.callTool(new McpSchema.CallToolRequest("inbox_claim", Map.of()));
+            client.callTool(call("inbox_claim", Map.of()));
         assertThat(bad.isError()).isTrue();
         assertThat(wireText(bad)).contains("input validation failed");
       }
@@ -133,7 +133,7 @@ class InboxMcpServerTest {
         client.initialize();
         McpSchema.CallToolResult badLease =
             client.callTool(
-                new McpSchema.CallToolRequest(
+                call(
                     "inbox_claim",
                     Map.of("itemIds", List.of("itm_missing"), "leaseSeconds", 1)));
         assertThat(badLease.isError()).isTrue();
@@ -141,13 +141,17 @@ class InboxMcpServerTest {
 
         McpSchema.CallToolResult unknownClaim =
             client.callTool(
-                new McpSchema.CallToolRequest(
+                call(
                     "inbox_release", Map.of("claimTokens", List.of("clm_missing"))));
         assertThat(unknownClaim.isError()).isFalse();
         JsonNode result = json(unknownClaim);
         assertThat(result.get("rejected").get(0).get("code").asText()).isEqualTo("CLAIM_INVALID");
       }
     }
+  }
+
+  private static McpSchema.CallToolRequest call(String name, Map<String, Object> arguments) {
+    return McpSchema.CallToolRequest.builder(name).arguments(arguments).build();
   }
 
   private static JsonNode json(McpSchema.CallToolResult result) throws Exception {

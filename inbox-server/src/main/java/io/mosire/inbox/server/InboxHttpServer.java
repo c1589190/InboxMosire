@@ -17,7 +17,6 @@ import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -61,6 +60,9 @@ public final class InboxHttpServer implements AutoCloseable {
   public synchronized void start() throws IOException {
     if (server != null) {
       return;
+    }
+    if (!ServerConfig.isLoopback(host)) {
+      throw new IllegalArgumentException("v1 HTTP API 仅允许回环地址，拒绝绑定: " + host);
     }
     HttpServer created = HttpServer.create(new InetSocketAddress(host, port), 0);
     executor = Executors.newVirtualThreadPerTaskExecutor();
