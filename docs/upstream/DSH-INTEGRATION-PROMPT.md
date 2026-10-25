@@ -1,3 +1,5 @@
+> 已被 [`DSH-MULTI-BINDING-PROMPT.md`](DSH-MULTI-BINDING-PROMPT.md) 取代；本文保留为 Mode A 单 binding 历史版本。
+
 # 给 InboxMosire-DSH 的对接提示词
 
 把下面整段提示词交给负责 `/home/cna/InboxMosire-DSH` 的工程 Agent。

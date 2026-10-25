@@ -1,4 +1,24 @@
-# Wake Adapter 契约 v1
+# Wake Adapter 契约
+
+> **v2 多 binding 变更（2026-10-25）**：当前 DSH 对接以
+> [`DSH-MULTI-BINDING-PROMPT.md`](DSH-MULTI-BINDING-PROMPT.md) 为准。
+> v2 要求一个 DSH host 维护 `sessionRef -> binding` 映射；每个 session 独立
+> `inboxId / adapterTokenRef / SSE / cursor / revision / wake watermark`。
+> 目标会话使用程序自有 MCP（Mode A），DSH adapter 只读 status + SSE + followup。
+> 下文保留为单 binding 历史契约。
+
+## v1 单 binding 历史契约
+
+# Wake Adapter 契约
+
+> **v2 多 binding 变更（2026-10-25）**：当前 DSH 对接以
+> [`DSH-MULTI-BINDING-PROMPT.md`](DSH-MULTI-BINDING-PROMPT.md) 为准。
+> v2 要求一个 DSH host 维护 `sessionRef -> binding` 映射；每个 session 独立
+> `inboxId / adapterTokenRef / SSE / cursor / revision / wake watermark`。
+> 目标会话使用程序自有 MCP（Mode A），DSH adapter 只读 status + SSE + followup。
+> 下文保留为单 binding 历史契约。
+
+## v1 单 binding 历史契约
 
 > 适用对象：`InboxMosire-DSH`，以及未来 Claude/Codex/其他 Agent 的 host adapter。
 > 核心后端不实现本契约中的宿主调用；adapter 是唯一知道 session 和 `followup` 的组件。
