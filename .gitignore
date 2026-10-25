@@ -1,0 +1,12 @@
+target/
+.work/
+.omo/
+*.db
+*.db-shm
+*.db-wal
+*.log
+data/
+.idea/
+*.iml
+.vscode/
+.DS_Store
