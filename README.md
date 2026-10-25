@@ -36,6 +36,7 @@ java -jar inbox-server/target/inbox-server-0.1.0-SNAPSHOT-all.jar serve --data-d
 
 - [`设计-服务端架构.md`](设计-服务端架构.md)
 - [`开发计划.md`](开发计划.md)
+- [`开发计划-多程序接入与Token管理.md`](开发计划-多程序接入与Token管理.md)
 - [`docs/upstream/http-sse-contract.md`](docs/upstream/http-sse-contract.md)
 - [`docs/upstream/mcp-tools.md`](docs/upstream/mcp-tools.md)
 - [`docs/upstream/wake-adapter-contract.md`](docs/upstream/wake-adapter-contract.md)
