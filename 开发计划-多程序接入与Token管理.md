@@ -1,7 +1,7 @@
 # 开发计划：多程序接入、动态 Inbox 绑定与 Token 分发
 
-> 日期：2026-10-25  
-> 状态：Plan v3，连接模式 A 已冻结  
+> 日期：2026-10-25
+> 状态：Plan v3；InboxMosire 侧 Phase 1/2/3 已实现，Phase 4 等待 DSH。连接模式 A 已冻结。
 > 关联：`设计-服务端架构.md`、`docs/api/openapi.yaml`、`docs/upstream/DSH-HANDOFF.md`
 >
 > 用户原话：
@@ -277,7 +277,7 @@ GET  /v1/admin/whoami
 
 ### 5.4 MCP 面
 
-保持现有无鉴权回环 MCP 和 Agent 工具面；不添加 raw token 管理工具。  
+保持现有无鉴权回环 MCP 和 Agent 工具面；不添加 raw token 管理工具。
 程序自己的 MCP 使用 `inbox-client-java` proxy；因此本计划不需要改 AgentLib MCP HTTP 鉴权。
 
 ---
@@ -302,6 +302,14 @@ GET  /v1/admin/whoami
 ---
 
 ## 7. 阶段计划
+
+实施状态（2026-10-25）：
+
+- Phase 1 服务端 provisioning/credential API：✅ 已实现。
+- Phase 2 `inbox-client-java`：✅ 已实现。
+- Phase 3 程序自有 MCP Toolset：✅ 已实现。
+- Phase 4 DSH 多 binding：⏳ 交给 `InboxMosire-DSH`。
+- Phase 5 端到端：⏳ 等 DSH v2。
 
 ### Phase 0：契约冻结
 

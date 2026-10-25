@@ -2,24 +2,28 @@ openapi: 3.1.0
 info:
   title: InboxMosire Producer / Adapter API
   version: 0.1.0
-  description: |
-    Local-only notification board API. MCP is the Agent tool plane; this HTTP API is
-    for producers (push) and host adapters (status + SSE). The API binds to loopback only
-    in v1. All bearer tokens go in the Authorization header; never put a token in a URL.
-servers:
-  - url: http://127.0.0.1:18765
-    description: Local loopback API
-security:
-  - bearerAuth: []
-tags:
-  - name: Health
-  - name: Producer
-  - name: Adapter
+  description: 'Local-only notification board API. MCP is the Agent tool plane; this HTTP API is
 
+    for producers (push) and host adapters (status + SSE). The API binds to loopback only
+
+    in v1. All bearer tokens go in the Authorization header; never put a token in a URL.
+
+    '
+servers:
+- url: http://127.0.0.1:18765
+  description: Local loopback API
+security:
+- bearerAuth: []
+tags:
+- name: Health
+- name: Producer
+- name: Adapter
+- name: Admin
 paths:
   /healthz:
     get:
-      tags: [Health]
+      tags:
+      - Health
       security: []
       operationId: healthz
       responses:
@@ -30,12 +34,15 @@ paths:
               schema:
                 type: object
                 properties:
-                  status: { type: string, const: ok }
-                required: [status]
-
+                  status:
+                    type: string
+                    const: ok
+                required:
+                - status
   /readyz:
     get:
-      tags: [Health]
+      tags:
+      - Health
       security: []
       operationId: readyz
       responses:
@@ -46,23 +53,26 @@ paths:
               schema:
                 type: object
                 properties:
-                  status: { type: string, const: ready }
-                required: [status]
+                  status:
+                    type: string
+                    const: ready
+                required:
+                - status
         '503':
           description: Database or default inbox not ready.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-
   /v1/inboxes/{inbox}/items:
     post:
-      tags: [Producer]
+      tags:
+      - Producer
       operationId: pushItem
       summary: Push one notification into an inbox.
       description: Requires bearer scope `items:write`. Token must also be scoped to the inbox and channel.
       parameters:
-        - $ref: '#/components/parameters/Inbox'
+      - $ref: '#/components/parameters/Inbox'
       requestBody:
         required: true
         content:
@@ -110,24 +120,65 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '422':
           $ref: '#/components/responses/Unprocessable'
-
+    get:
+      tags:
+      - Producer
+      operationId: listItems
+      summary: List available item summaries without payload.
+      description: Requires `items:read`. Channel-scoped credentials see only their channels.
+      parameters:
+      - $ref: '#/components/parameters/Inbox'
+      - name: channel
+        in: query
+        required: false
+        style: form
+        explode: true
+        schema:
+          type: array
+          items:
+            type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+      responses:
+        '200':
+          description: Available items.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
   /v1/inboxes/{inbox}/status:
     get:
-      tags: [Adapter]
+      tags:
+      - Adapter
       operationId: getStatus
       summary: Get the current board truth without item content.
       description: Requires bearer scope `status:read`. Channel-scoped tokens see only their allowed channels.
       parameters:
-        - $ref: '#/components/parameters/Inbox'
-        - name: channel
-          in: query
-          required: false
-          description: Repeat for multiple channels; comma-separated values are also accepted by the server.
-          style: form
-          explode: true
-          schema:
-            type: array
-            items: { type: string }
+      - $ref: '#/components/parameters/Inbox'
+      - name: channel
+        in: query
+        required: false
+        description: Repeat for multiple channels; comma-separated values are also accepted by the server.
+        style: form
+        explode: true
+        schema:
+          type: array
+          items:
+            type: string
       responses:
         '200':
           description: Current board snapshot.
@@ -141,38 +192,53 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-
   /v1/inboxes/{inbox}/events:
     get:
-      tags: [Adapter]
+      tags:
+      - Adapter
       operationId: streamEvents
       summary: Subscribe to board change events over SSE.
-      description: |
-        Requires bearer scope `events:read`. The response is `text/event-stream`.
+      description: 'Requires bearer scope `events:read`. The response is `text/event-stream`.
+
         Each event has an SSE `id:` equal to the durable event sequence and an
+
         `event: inbox.changed` name. The `data:` line is a CloudEvents 1.0 JSON envelope.
+
         Events contain counts and channel changes only: no title, payload, claim token,
+
         or API token.
 
+
         A client with no Last-Event-ID starts at the current event tip. Adapters should
+
         fetch `/status` on startup and use this stream as an invalidation signal.
+
         Reconnect with the last SSE id in the `Last-Event-ID` header to replay events.
+
+        '
       parameters:
-        - $ref: '#/components/parameters/Inbox'
-        - name: Last-Event-ID
-          in: header
-          required: false
-          schema: { type: integer, minimum: 0, format: int64 }
-        - name: Accept
-          in: header
-          required: false
-          schema: { type: string, example: text/event-stream }
+      - $ref: '#/components/parameters/Inbox'
+      - name: Last-Event-ID
+        in: header
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          format: int64
+      - name: Accept
+        in: header
+        required: false
+        schema:
+          type: string
+          example: text/event-stream
       responses:
         '200':
-          description: "SSE stream. Heartbeats are comment frames (`: ping`)."
+          description: 'SSE stream. Heartbeats are comment frames (`: ping`).'
           headers:
             Cache-Control:
-              schema: { type: string, const: no-cache }
+              schema:
+                type: string
+                const: no-cache
           content:
             text/event-stream:
               schema:
@@ -180,11 +246,13 @@ paths:
               examples:
                 changed:
                   summary: CloudEvents 1.0 frame
-                  value: |
-                    id: 12
+                  value: 'id: 12
+
                     event: inbox.changed
+
                     data: {"specversion":"1.0","id":"evt_...","source":"urn:inboxmosire:inbox:main","type":"io.mosire.inbox.changed.v1","subject":"main","time":"2026-10-25T00:00:00Z","datacontenttype":"application/json","data":{"inbox":"main","revision":3,"available":1,"claimed":0,"channels":{"ticket":{"available":1,"claimed":0}},"changedChannels":["ticket"]}}
 
+                    '
         '400':
           description: Invalid Last-Event-ID.
           content:
@@ -203,25 +271,294 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-
+  /v1/inboxes/{inbox}:
+    put:
+      tags:
+      - Producer
+      operationId: ensureInbox
+      summary: Idempotently create the exact-bound inbox.
+      description: Requires scope `inbox:ensure` on a token exactly bound to this inbox, or `admin:inboxes`. Wildcard producer
+        tokens may not create arbitrary inboxes.
+      parameters:
+      - $ref: '#/components/parameters/Inbox'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnsureInboxResponse'
+        '200':
+          description: Already existed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnsureInboxResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+  /v1/inboxes/{inbox}/claims:
+    post:
+      tags:
+      - Producer
+      operationId: claimItems
+      summary: Atomically claim selected item ids.
+      description: Requires `items:manage`. The claim token in the response is the capability for complete/renew/release.
+      parameters:
+      - $ref: '#/components/parameters/Inbox'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClaimRequest'
+      responses:
+        '200':
+          description: Claim result, including per-item accepted/rejected lists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClaimResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+  /v1/inboxes/{inbox}/claims/renew:
+    post:
+      tags:
+      - Producer
+      operationId: renewClaims
+      summary: Renew active claim leases.
+      description: Requires `items:manage`.
+      parameters:
+      - $ref: '#/components/parameters/Inbox'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenewRequest'
+      responses:
+        '200':
+          description: Operation result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RenewResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+  /v1/inboxes/{inbox}/claims/complete:
+    post:
+      tags:
+      - Producer
+      operationId: completeClaims
+      summary: Complete or fail claimed items.
+      description: Requires `items:manage`.
+      parameters:
+      - $ref: '#/components/parameters/Inbox'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompleteRequest'
+      responses:
+        '200':
+          description: Operation result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompleteResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+  /v1/inboxes/{inbox}/claims/release:
+    post:
+      tags:
+      - Producer
+      operationId: releaseClaims
+      summary: Release active claims back to available.
+      description: Requires `items:manage`.
+      parameters:
+      - $ref: '#/components/parameters/Inbox'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseRequest'
+      responses:
+        '200':
+          description: Operation result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+  /v1/admin/whoami:
+    get:
+      tags:
+      - Admin
+      operationId: whoAmI
+      summary: Return metadata of the calling credential.
+      description: Available to any valid bearer token. Never returns raw token.
+      responses:
+        '200':
+          description: Credential metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialView'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/admin/credentials:
+    get:
+      tags:
+      - Admin
+      operationId: listCredentials
+      summary: List credential metadata; raw token is never returned.
+      description: Requires `admin:credentials`.
+      parameters:
+      - name: inbox
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Credential metadata list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/admin/inboxes/{inbox}/credentials:
+    post:
+      tags:
+      - Admin
+      operationId: issueCredential
+      summary: Issue a scoped credential. Raw token is returned exactly once.
+      description: Requires `admin:credentials`, or `credentials:issue:self` with an exact inbox binding and no scope/channel
+        broadening.
+      parameters:
+      - $ref: '#/components/parameters/Inbox'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialIssueRequest'
+      responses:
+        '201':
+          description: Issued credential and raw token. Store it in a local secret immediately.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedCredentialResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+  /v1/admin/credentials/{credentialId}/rotate:
+    post:
+      tags:
+      - Admin
+      operationId: rotateCredential
+      summary: Revoke old credential and issue a replacement with the same scope.
+      description: Requires `admin:credentials` or self-management authority over the target.
+      parameters:
+      - $ref: '#/components/parameters/CredentialId'
+      responses:
+        '200':
+          description: Replacement credential and raw token returned once.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedCredentialResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/admin/credentials/{credentialId}/revoke:
+    post:
+      tags:
+      - Admin
+      operationId: revokeCredential
+      summary: Revoke a credential.
+      parameters:
+      - $ref: '#/components/parameters/CredentialId'
+      responses:
+        '200':
+          description: Revocation result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevokeResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: opaque
-      description: |
-        Issued locally by `inboxd token issue`. Scopes:
-        `items:write`, `status:read`, `events:read`.
-        Tokens are shown once and stored only as SHA-256 hashes.
-
+      description: 'Locally issued opaque token. Scopes: items:write, items:read, items:manage, status:read, events:read,
+        inbox:ensure, credentials:issue:self, admin:inboxes, admin:credentials. Tokens are shown only at issue/rotate and
+        stored as SHA-256 hashes.'
   parameters:
     Inbox:
       name: inbox
       in: path
       required: true
-      schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,64}$' }
-
+      schema:
+        type: string
+        pattern: ^[A-Za-z0-9._-]{1,64}$
+    CredentialId:
+      name: credentialId
+      in: path
+      required: true
+      schema:
+        type: string
   responses:
     BadRequest:
       description: Malformed request.
@@ -253,31 +590,37 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
-
   schemas:
     PushItemRequest:
       type: object
       additionalProperties: false
-      required: [channel]
+      required:
+      - channel
       properties:
         channel:
           type: string
-          pattern: '^[A-Za-z0-9._-]{1,64}$'
+          pattern: ^[A-Za-z0-9._-]{1,64}$
         kind:
           type: string
-          pattern: '^[A-Za-z0-9._-]{1,64}$'
+          pattern: ^[A-Za-z0-9._-]{1,64}$
           default: notification
         title:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
           maxLength: 512
           description: Optional human label. Present in inbox_list, but never in SSE or wake messages.
         payload:
           description: Opaque item content. Returned only to the Agent after MCP claim.
         payloadRef:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
           maxLength: 2048
         dedupeKey:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
           maxLength: 256
           description: Deduplicates non-done items in the same inbox+channel.
         priority:
@@ -285,84 +628,469 @@ components:
           minimum: -1000
           maximum: 1000
           default: 0
-
     PushItemResponse:
       type: object
-      required: [itemId, duplicate, revision, createdAt]
+      required:
+      - itemId
+      - duplicate
+      - revision
+      - createdAt
       properties:
-        itemId: { type: string }
-        duplicate: { type: boolean }
-        revision: { type: integer, format: int64 }
-        createdAt: { type: string, format: date-time }
-
+        itemId:
+          type: string
+        duplicate:
+          type: boolean
+        revision:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
     ChannelCounts:
       type: object
-      required: [available, claimed]
+      required:
+      - available
+      - claimed
       properties:
-        available: { type: integer, format: int64 }
-        claimed: { type: integer, format: int64 }
-
+        available:
+          type: integer
+          format: int64
+        claimed:
+          type: integer
+          format: int64
     InboxStatus:
       type: object
-      required: [inbox, revision, available, claimed, channels, updatedAt]
+      required:
+      - inbox
+      - revision
+      - available
+      - claimed
+      - channels
+      - updatedAt
       properties:
-        inbox: { type: string }
-        revision: { type: integer, format: int64 }
-        available: { type: integer, format: int64 }
-        claimed: { type: integer, format: int64 }
+        inbox:
+          type: string
+        revision:
+          type: integer
+          format: int64
+        available:
+          type: integer
+          format: int64
+        claimed:
+          type: integer
+          format: int64
         channels:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/ChannelCounts'
-        updatedAt: { type: string, format: date-time }
-
+        updatedAt:
+          type: string
+          format: date-time
     ErrorEnvelope:
       type: object
-      required: [error]
+      required:
+      - error
       properties:
         error:
           type: object
-          required: [code, message]
+          required:
+          - code
+          - message
           properties:
             code:
               type: string
               enum:
-                - INVALID_ARGUMENT
-                - INVALID_JSON
-                - INVALID_CURSOR
-                - UNAUTHORIZED
-                - FORBIDDEN
-                - NOT_FOUND
-                - METHOD_NOT_ALLOWED
-                - NOT_ACCEPTABLE
-                - PAYLOAD_TOO_LARGE
-                - UNSUPPORTED_MEDIA_TYPE
-                - INTERNAL
-            message: { type: string }
-
+              - INVALID_ARGUMENT
+              - INVALID_JSON
+              - INVALID_CURSOR
+              - UNAUTHORIZED
+              - FORBIDDEN
+              - NOT_FOUND
+              - METHOD_NOT_ALLOWED
+              - NOT_ACCEPTABLE
+              - PAYLOAD_TOO_LARGE
+              - UNSUPPORTED_MEDIA_TYPE
+              - INTERNAL
+            message:
+              type: string
     CloudEventInboxChanged:
       type: object
-      required: [specversion, id, source, type, subject, time, datacontenttype, data]
+      required:
+      - specversion
+      - id
+      - source
+      - type
+      - subject
+      - time
+      - datacontenttype
+      - data
       properties:
-        specversion: { type: string, const: '1.0' }
-        id: { type: string }
-        source: { type: string, example: 'urn:inboxmosire:inbox:main' }
-        type: { type: string, const: 'io.mosire.inbox.changed.v1' }
-        subject: { type: string }
-        time: { type: string, format: date-time }
-        datacontenttype: { type: string, const: application/json }
+        specversion:
+          type: string
+          const: '1.0'
+        id:
+          type: string
+        source:
+          type: string
+          example: urn:inboxmosire:inbox:main
+        type:
+          type: string
+          const: io.mosire.inbox.changed.v1
+        subject:
+          type: string
+        time:
+          type: string
+          format: date-time
+        datacontenttype:
+          type: string
+          const: application/json
         data:
           type: object
-          required: [inbox, revision, available, claimed, channels, changedChannels]
+          required:
+          - inbox
+          - revision
+          - available
+          - claimed
+          - channels
+          - changedChannels
           properties:
-            inbox: { type: string }
-            revision: { type: integer, format: int64 }
-            available: { type: integer, format: int64 }
-            claimed: { type: integer, format: int64 }
+            inbox:
+              type: string
+            revision:
+              type: integer
+              format: int64
+            available:
+              type: integer
+              format: int64
+            claimed:
+              type: integer
+              format: int64
             channels:
               type: object
               additionalProperties:
                 $ref: '#/components/schemas/ChannelCounts'
             changedChannels:
               type: array
-              items: { type: string }
+              items:
+                type: string
+    EnsureInboxResponse:
+      type: object
+      required:
+      - inbox
+      - created
+      properties:
+        inbox:
+          type: string
+        created:
+          type: boolean
+    ItemSummary:
+      type: object
+      required:
+      - itemId
+      - channel
+      - kind
+      - priority
+      - attempts
+      - createdAt
+      properties:
+        itemId:
+          type: string
+        channel:
+          type: string
+        kind:
+          type: string
+        title:
+          type:
+          - string
+          - 'null'
+        priority:
+          type: integer
+        attempts:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+    ItemListResponse:
+      type: object
+      required:
+      - inbox
+      - items
+      - count
+      properties:
+        inbox:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ItemSummary'
+        count:
+          type: integer
+    ClaimRequest:
+      type: object
+      required:
+      - itemIds
+      properties:
+        itemIds:
+          type: array
+          items:
+            type: string
+        leaseSeconds:
+          type: integer
+          minimum: 30
+          maximum: 3600
+          default: 300
+    ClaimedItem:
+      type: object
+      properties:
+        itemId:
+          type: string
+        channel:
+          type: string
+        kind:
+          type: string
+        title:
+          type:
+          - string
+          - 'null'
+        payload: {}
+        payloadRef:
+          type:
+          - string
+          - 'null'
+        priority:
+          type: integer
+        claimToken:
+          type: string
+        claimExpiresAt:
+          type: string
+          format: date-time
+    Rejection:
+      type: object
+      properties:
+        subject:
+          type: string
+        code:
+          type: string
+        message:
+          type: string
+    ClaimResult:
+      type: object
+      required:
+      - revision
+      - available
+      - claimed
+      - rejected
+      properties:
+        revision:
+          type: integer
+          format: int64
+        available:
+          type: integer
+          format: int64
+        claimed:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClaimedItem'
+        rejected:
+          type: array
+          items:
+            $ref: '#/components/schemas/Rejection'
+    RenewRequest:
+      type: object
+      required:
+      - claimTokens
+      properties:
+        claimTokens:
+          type: array
+          items:
+            type: string
+        leaseSeconds:
+          type: integer
+          minimum: 30
+          maximum: 3600
+          default: 300
+    RenewedClaim:
+      type: object
+      properties:
+        claimToken:
+          type: string
+        itemId:
+          type: string
+        claimExpiresAt:
+          type: string
+          format: date-time
+    RenewResult:
+      type: object
+      properties:
+        renewed:
+          type: array
+          items:
+            $ref: '#/components/schemas/RenewedClaim'
+        rejected:
+          type: array
+          items:
+            $ref: '#/components/schemas/Rejection'
+    CompletionRequest:
+      type: object
+      required:
+      - claimToken
+      properties:
+        claimToken:
+          type: string
+        outcome:
+          type: string
+          enum:
+          - completed
+          - failed
+        summary:
+          type: string
+    CompleteRequest:
+      type: object
+      required:
+      - completions
+      properties:
+        completions:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompletionRequest'
+    CompletionAck:
+      type: object
+      properties:
+        itemId:
+          type: string
+        outcome:
+          type: string
+        idempotent:
+          type: boolean
+    CompleteResult:
+      type: object
+      properties:
+        revision:
+          type: integer
+          format: int64
+        available:
+          type: integer
+          format: int64
+        completed:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompletionAck'
+        rejected:
+          type: array
+          items:
+            $ref: '#/components/schemas/Rejection'
+    ReleaseRequest:
+      type: object
+      required:
+      - claimTokens
+      properties:
+        claimTokens:
+          type: array
+          items:
+            type: string
+    ReleaseResult:
+      type: object
+      properties:
+        revision:
+          type: integer
+          format: int64
+        available:
+          type: integer
+          format: int64
+        releasedItemIds:
+          type: array
+          items:
+            type: string
+        rejected:
+          type: array
+          items:
+            $ref: '#/components/schemas/Rejection'
+    CredentialIssueRequest:
+      type: object
+      required:
+      - label
+      - scopes
+      properties:
+        label:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        channels:
+          type: array
+          items:
+            type: string
+        expiresInSeconds:
+          type: integer
+          minimum: 1
+          maximum: 31536000
+    CredentialView:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        inbox:
+          type: string
+        channels:
+          type: array
+          items:
+            type: string
+        fingerprint:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        lastUsedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        revokedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        rotatedFrom:
+          type:
+          - string
+          - 'null'
+        createdBy:
+          type:
+          - string
+          - 'null'
+    IssuedCredentialResponse:
+      type: object
+      required:
+      - credential
+      - token
+      properties:
+        credential:
+          $ref: '#/components/schemas/CredentialView'
+        token:
+          type: string
+    CredentialListResponse:
+      type: object
+      properties:
+        credentials:
+          type: array
+          items:
+            $ref: '#/components/schemas/CredentialView'
+    RevokeResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        revoked:
+          type: boolean

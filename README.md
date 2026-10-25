@@ -15,7 +15,9 @@
 |---|---|
 | `inbox-core` | 领域类型、状态机、用例与端口；不依赖 AgentLib、HTTP、SQLite |
 | `inbox-sqlite` | SQLite WAL、迁移、事务、claim、outbox 事件、API token 存储 |
-| `inbox-server` | Producer HTTP API、SSE、AgentLib MCP 工具、CLI 和进程生命周期 |
+| `inbox-client` | Agent 无关的 Java HTTP 客户端、TokenStore、BindingDescriptor |
+| `inbox-mcp-tools-client` | 程序自有 MCP 使用的 inbox AgentTool 集合 |
+| `inbox-server` | Producer/Adapter HTTP API、SSE、AgentLib MCP 工具、CLI 和进程生命周期 |
 
 ## 快速开始
 
@@ -26,6 +28,18 @@ java -jar inbox-server/target/inbox-server-0.1.0-SNAPSHOT-all.jar token issue \
   --data-dir ./data --label dsh-adapter --scope events:read --scope status:read --inbox main
 java -jar inbox-server/target/inbox-server-0.1.0-SNAPSHOT-all.jar serve --data-dir ./data
 ```
+
+共享客户端：
+
+```xml
+<dependency>
+  <groupId>io.mosire</groupId>
+  <artifactId>inbox-client</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+</dependency>
+```
+
+使用流程见 [`docs/upstream/program-integration.md`](docs/upstream/program-integration.md)。
 
 默认只监听回环地址：
 
@@ -40,6 +54,8 @@ java -jar inbox-server/target/inbox-server-0.1.0-SNAPSHOT-all.jar serve --data-d
 - [`docs/upstream/http-sse-contract.md`](docs/upstream/http-sse-contract.md)
 - [`docs/upstream/mcp-tools.md`](docs/upstream/mcp-tools.md)
 - [`docs/upstream/wake-adapter-contract.md`](docs/upstream/wake-adapter-contract.md)
+- [`docs/upstream/program-integration.md`](docs/upstream/program-integration.md)
+- [`docs/upstream/DSH-MULTI-BINDING-PROMPT.md`](docs/upstream/DSH-MULTI-BINDING-PROMPT.md)
 - [`docs/api/openapi.yaml`](docs/api/openapi.yaml)
 - [`docs/agents/STATUS.md`](docs/agents/STATUS.md)
 

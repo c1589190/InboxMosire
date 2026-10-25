@@ -203,3 +203,166 @@ INBOX_SSE_HEARTBEAT_SECONDS=15
 ```
 
 `INBOX_API_TOKEN` 不能进仓库、不能进日志、不能进 URL。
+
+---
+
+# v1.1 增补：多程序 provisioning、操作面与 token 管理
+
+## 1. Scope 全集
+
+| Scope | 作用 |
+|---|---|
+| `items:write` | push |
+| `items:read` | list available item 摘要 |
+| `items:manage` | claim / renew / complete / release |
+| `status:read` | board status |
+| `events:read` | SSE |
+| `inbox:ensure` | 幂等创建自己精确绑定的 inbox |
+| `credentials:issue:self` | 为自己精确绑定的 inbox 签发不扩权的子 credential |
+| `admin:inboxes` | 管理任意 inbox |
+| `admin:credentials` | 管理任意 credential |
+
+普通 producer/wake token 不应获得 admin scope。
+
+## 2. Inbox ensure
+
+```http
+PUT /v1/inboxes/{inbox}
+Authorization: Bearer <inbox:ensure-or-admin-token>
+```
+
+响应：
+
+```json
+{"inbox":"app-a","created":true}
+```
+
+再次调用返回 200 + `created:false`。
+
+`inbox:ensure` 只有在 token 的 inbox 精确等于路径 inbox 时生效；通配 token 不能借 ensure 创建任意 inbox。
+
+## 3. Item 读与 claim 操作面
+
+### `GET /v1/inboxes/{inbox}/items`
+
+需要 `items:read`。
+
+```http
+GET /v1/inboxes/app-a/items?channel=ticket&limit=50
+```
+
+响应：
+
+```json
+{
+  "inbox":"app-a",
+  "count":1,
+  "items":[
+    {
+      "itemId":"itm_...",
+      "channel":"ticket",
+      "kind":"reply",
+      "title":"工单更新",
+      "priority":0,
+      "attempts":0,
+      "createdAt":"2026-10-25T00:00:00Z"
+    }
+  ]
+}
+```
+
+### `POST /v1/inboxes/{inbox}/claims`
+
+需要 `items:manage`。
+
+```json
+{"itemIds":["itm_a","itm_b"],"leaseSeconds":300}
+```
+
+返回 `{revision, available, claimed[], rejected[]}`。`claimed[]` 中每个 item 含 `claimToken` 与 payload；`rejected[]` 含 `subject/code/message`。
+
+### `POST /v1/inboxes/{inbox}/claims/renew`
+
+```json
+{"claimTokens":["clm_..."],"leaseSeconds":300}
+```
+
+### `POST /v1/inboxes/{inbox}/claims/complete`
+
+```json
+{
+  "completions":[
+    {"claimToken":"clm_...","outcome":"completed","summary":"已处理"}
+  ]
+}
+```
+
+### `POST /v1/inboxes/{inbox}/claims/release`
+
+```json
+{"claimTokens":["clm_..."]}
+```
+
+channel-scoped `items:read` / `items:manage` token 只能看到并 claim 自己 channel 范围内的 item；越界的 claim 进入 `rejected`。
+
+## 4. Credential 管理
+
+### `POST /v1/admin/inboxes/{inbox}/credentials`
+
+需要 `admin:credentials`，或 `credentials:issue:self` + 精确 inbox 绑定 + 不扩权的 scopes/channels。
+
+```json
+{
+  "label":"program-a-mcp",
+  "scopes":["items:write","items:read","items:manage","status:read"],
+  "channels":[],
+  "expiresInSeconds":86400
+}
+```
+
+响应是唯一一次包含 raw token：
+
+```json
+{
+  "credential":{
+    "id":"cred_...",
+    "label":"program-a-mcp",
+    "scopes":["items:write","items:read","items:manage","status:read"],
+    "inbox":"app-a",
+    "channels":[],
+    "fingerprint":"sha256:...",
+    "createdAt":"...",
+    "expiresAt":"...",
+    "lastUsedAt":null,
+    "revokedAt":null,
+    "rotatedFrom":null,
+    "createdBy":"cred_..."
+  },
+  "token":"inbox_..."
+}
+```
+
+### `GET /v1/admin/credentials?inbox=...`
+
+需要 `admin:credentials`。只返回 metadata，不返回 token 原文和 token hash。
+
+### `POST /v1/admin/credentials/{id}/rotate`
+
+撤销旧 credential，签发同 scope 的新 credential，raw token 返回一次。
+
+### `POST /v1/admin/credentials/{id}/revoke`
+
+立即 revoke；旧 token 后续请求 401。
+
+### `GET /v1/admin/whoami`
+
+任何合法 token 可调用，返回自己的 metadata/fingerprint，不返回 raw token。
+
+## 5. Token 使用边界
+
+- raw token 只在 issue/rotate 时返回一次；
+- 程序应立刻写入本机 `0600` secret；
+- MCP tool result 不返回 raw token；
+- SSE/wake/日志不得包含 token；
+- credential rotation 后旧 token 立即失效；
+- admin credential 不自动适用于普通程序 MCP proxy。

@@ -260,3 +260,36 @@ Tool (inbox_claim) input validation failed: ...
 ```
 
 这不属于 InboxMosire 的业务错误码，但同样是 fail-closed。
+
+---
+
+# v1.1 增补：程序自有 MCP（Mode A）
+
+共享模块 `inbox-mcp-tools-client` 可以把 `InboxClient` 包装成一组 AgentLib `AgentTool`，注册到程序自己的 MCP server：
+
+```java
+InboxClient programClient = InboxClient.forTokenFile(baseUrl, tokenFile);
+ToolRegistry registry = new ToolRegistry();
+registry.registerAll(new InboxClientMcpTools(programClient, "app-a").all());
+```
+
+工具：
+
+- `inbox_status`
+- `inbox_list`
+- `inbox_claim`
+- `inbox_renew`
+- `inbox_complete`
+- `inbox_release`
+- `inbox_push`
+- `inbox_credential_info`
+
+与中心 MCP 工具的区别：
+
+- 工具内部通过 HTTP + `InboxClient` 调 daemon；
+- 可被程序自己的 MCP server 和程序业务工具放在一起；
+- token 留在程序进程/secret source，不进入工具参数；
+- `inbox_credential_info` 只返回 metadata/fingerprint，不返回 raw token；
+- claim token 仍会出现在 claim 结果中，因为它是 Agent 处理对应 item 的能力凭证。
+
+目标会话在 Mode A 下只调用程序自有 MCP；DSH adapter 只负责 SSE + wake。

@@ -21,6 +21,12 @@ scripts/gate.sh full
 
 当前完整门禁结果记录在 `docs/agents/STATUS.md`。
 
+## v2 验证补充（2026-10-25）
+
+- `./mvnw -B -ntp clean verify`：27 tests，0 failures/errors/skipped；所有模块 Checkstyle 0。
+- 真实 live 实例：旧 SQLite schema 迁移、旧 token 兼容、共享 client provision/issue/descriptor、scope 403、SSE 隐私扫描均通过。
+- 证据：`.work/live/logs/verification-v2.txt`（本机，不入库）。
+
 ## 禁止
 
 - `-DskipTests` 冒充通过；
