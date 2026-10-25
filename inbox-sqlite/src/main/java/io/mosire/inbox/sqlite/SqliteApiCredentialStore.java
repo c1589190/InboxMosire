@@ -16,8 +16,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.locks.ReentrantLock;
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 
 /** 本地 bearer credential 存储。数据库只保存 token 的 SHA-256 hash。 */
 public final class SqliteApiCredentialStore {
