@@ -64,6 +64,16 @@ curl -fsS http://127.0.0.1:18765/v1/inboxes/main/status \
   -H "Authorization: Bearer $(tr -d '\n' < /home/cna/InboxMosire/.work/live/secrets/dsh-adapter.token)"
 ```
 
+当前 live 实例状态：
+
+- `main` 是干净板，适合最终接 DSH；
+- `smoke` 板当前有 1 条验证通知，适合先做闭环测试；
+- `smoke` 的 adapter token：`.work/live/secrets/dsh-smoke-adapter.token`；
+- `smoke` 的 producer token：`.work/live/secrets/smoke-producer.token`；
+- 完整 runtime env：`.work/live/runtime.env`；
+- 现场验证证据：`.work/live/logs/verification.txt`；
+- 不要为了测试把 main 弄脏；先用 smoke，确认状态机后再切 main。
+
 ## 3. 必须先探测 DSH 宿主能力
 
 动手写代码前先找到并报告 DSH 的真实 API/文件行：
