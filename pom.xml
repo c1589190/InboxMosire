@@ -16,6 +16,8 @@
   <modules>
     <module>inbox-core</module>
     <module>inbox-sqlite</module>
+    <module>inbox-client</module>
+    <module>inbox-mcp-tools-client</module>
     <module>inbox-server</module>
   </modules>
 

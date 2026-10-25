@@ -81,11 +81,18 @@ public final class InboxService {
   }
 
   public ClaimResult claim(String inboxId, List<String> itemIds, Duration lease) {
+    return claim(inboxId, itemIds, lease, Set.of());
+  }
+
+  public ClaimResult claim(
+      String inboxId, List<String> itemIds, Duration lease, Set<String> allowedChannels) {
     requireId("inbox", inboxId);
     List<String> normalized = normalizeItemIds(itemIds);
+    Set<String> normalizedChannels = normalizeChannels(allowedChannels);
     Duration safeLease = normalizeLease(lease);
     sweepExpired();
-    ClaimResult result = store.claim(inboxId, normalized, safeLease, clock.instant());
+    ClaimResult result =
+        store.claim(inboxId, normalized, safeLease, clock.instant(), normalizedChannels);
     if (!result.claimed().isEmpty()) {
       notifier.changed();
     }
@@ -137,9 +144,9 @@ public final class InboxService {
     }
   }
 
-  public void createInbox(String inboxId) {
+  public boolean createInbox(String inboxId) {
     requireId("inbox", inboxId);
-    store.createInbox(inboxId);
+    return store.createInbox(inboxId);
   }
 
   public boolean inboxExists(String inboxId) {

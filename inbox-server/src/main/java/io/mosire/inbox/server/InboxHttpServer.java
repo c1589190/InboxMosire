@@ -4,11 +4,19 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.mosire.inbox.core.InboxException;
 import io.mosire.inbox.core.InboxService;
+import io.mosire.inbox.core.CompleteResult;
+import io.mosire.inbox.core.Completion;
+import io.mosire.inbox.core.CompletionOutcome;
 import io.mosire.inbox.core.InboxStatus;
+import io.mosire.inbox.core.ItemSummary;
+import io.mosire.inbox.core.ClaimResult;
+import io.mosire.inbox.core.ReleaseResult;
+import io.mosire.inbox.core.RenewResult;
 import io.mosire.inbox.core.PushCommand;
 import io.mosire.inbox.core.PushResult;
 import io.mosire.inbox.core.StoredEvent;
 import io.mosire.inbox.sqlite.ApiCredential;
+import io.mosire.inbox.sqlite.IssuedCredential;
 import io.mosire.inbox.sqlite.SqliteApiCredentialStore;
 import java.io.IOException;
 import java.io.InputStream;
@@ -17,6 +25,7 @@ import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -92,6 +101,8 @@ public final class InboxHttpServer implements AutoCloseable {
       route(exchange, path);
     } catch (InboxException e) {
       sendJson(exchange, statusFor(e.code()), new ApiError(e.code().name(), e.getMessage()).body());
+    } catch (SecurityException e) {
+      sendJson(exchange, 403, new ApiError("FORBIDDEN", e.getMessage()).body());
     } catch (IllegalArgumentException e) {
       sendJson(exchange, 422, new ApiError("INVALID_ARGUMENT", e.getMessage()).body());
     } catch (Exception e) {
@@ -104,17 +115,71 @@ public final class InboxHttpServer implements AutoCloseable {
 
   private void route(HttpExchange exchange, String path) throws IOException {
     List<String> segments = segments(path);
-    if (segments.size() != 4
-        || !"v1".equals(segments.get(0))
-        || !"inboxes".equals(segments.get(1))) {
+    if (segments.isEmpty() || !"v1".equals(segments.getFirst())) {
       sendJson(exchange, 404, new ApiError("NOT_FOUND", "路由不存在").body());
       return;
     }
-    String inboxId = segments.get(2);
-    String resource = segments.get(3);
-    ApiCredential credential = authenticate(exchange);
+    if (segments.size() == 3
+        && "inboxes".equals(segments.get(1))) {
+      ensureInbox(exchange, segments.get(2));
+      return;
+    }
+    if (segments.size() == 4 && "inboxes".equals(segments.get(1))) {
+      routeInboxResource(exchange, segments.get(2), segments.get(3));
+      return;
+    }
+    if (segments.size() == 3 && "admin".equals(segments.get(1))
+        && "whoami".equals(segments.get(2))) {
+      whoAmI(exchange);
+      return;
+    }
+    if (segments.size() == 3 && "admin".equals(segments.get(1))
+        && "credentials".equals(segments.get(2))) {
+      listCredentials(exchange);
+      return;
+    }
+    if (segments.size() == 5 && "admin".equals(segments.get(1))
+        && "inboxes".equals(segments.get(2))
+        && "credentials".equals(segments.get(4))) {
+      issueCredential(exchange, segments.get(3));
+      return;
+    }
+    if (segments.size() == 5 && "admin".equals(segments.get(1))
+        && "credentials".equals(segments.get(2))) {
+      manageCredential(exchange, segments.get(3), segments.get(4));
+      return;
+    }
+    if (segments.size() == 5
+        && "inboxes".equals(segments.get(1))
+        && "claims".equals(segments.get(3))) {
+      routeClaimAction(exchange, segments.get(2), segments.get(4));
+      return;
+    }
+    sendJson(exchange, 404, new ApiError("NOT_FOUND", "路由不存在").body());
+  }
+
+  private void ensureInbox(HttpExchange exchange, String inboxId) throws IOException {
+    if (!"PUT".equals(exchange.getRequestMethod())) {
+      methodNotAllowed(exchange, "PUT");
+      return;
+    }
+    ApiCredential credential = requireAuth(exchange);
     if (credential == null) {
-      sendJson(exchange, 401, new ApiError("UNAUTHORIZED", "缺少或无效 Bearer token").body());
+      return;
+    }
+    if (!credential.allowsInbox(inboxId)) {
+      sendJson(exchange, 403, new ApiError("FORBIDDEN", "token 无权访问该 inbox").body());
+      return;
+    }
+    CredentialPolicy.requireEnsure(credential, inboxId);
+    boolean created = service.createInbox(inboxId);
+    sendJson(exchange, created ? 201 : 200, Map.of("inbox", inboxId, "created", created));
+  }
+
+  private void routeInboxResource(HttpExchange exchange, String inboxId, String resource)
+      throws IOException {
+    ApiCredential credential = requireAuth(exchange);
+    if (credential == null) {
       return;
     }
     if (!credential.allowsInbox(inboxId)) {
@@ -125,17 +190,33 @@ public final class InboxHttpServer implements AutoCloseable {
       sendJson(exchange, 404, new ApiError("NOT_FOUND", "inbox 不存在").body());
       return;
     }
-
     switch (resource) {
       case "items" -> {
+        if ("POST".equals(exchange.getRequestMethod())) {
+          if (!requiresScope(exchange, credential, ApiScopes.ITEMS_WRITE)) {
+            return;
+          }
+          push(exchange, inboxId, credential);
+          return;
+        }
+        if ("GET".equals(exchange.getRequestMethod())) {
+          if (!requiresScope(exchange, credential, ApiScopes.ITEMS_READ)) {
+            return;
+          }
+          listItems(exchange, inboxId, credential);
+          return;
+        }
+        methodNotAllowed(exchange, "GET, POST");
+      }
+      case "claims" -> {
         if (!"POST".equals(exchange.getRequestMethod())) {
           methodNotAllowed(exchange, "POST");
           return;
         }
-        if (!requiresScope(exchange, credential, ApiScopes.ITEMS_WRITE)) {
+        if (!requiresScope(exchange, credential, ApiScopes.ITEMS_MANAGE)) {
           return;
         }
-        push(exchange, inboxId, credential);
+        claimItems(exchange, inboxId, credential);
       }
       case "status" -> {
         if (!"GET".equals(exchange.getRequestMethod())) {
@@ -159,6 +240,150 @@ public final class InboxHttpServer implements AutoCloseable {
       }
       default -> sendJson(exchange, 404, new ApiError("NOT_FOUND", "资源不存在").body());
     }
+  }
+
+  private void whoAmI(HttpExchange exchange) throws IOException {
+    if (!"GET".equals(exchange.getRequestMethod())) {
+      methodNotAllowed(exchange, "GET");
+      return;
+    }
+    ApiCredential credential = requireAuth(exchange);
+    if (credential == null) {
+      return;
+    }
+    sendJson(exchange, 200, CredentialView.from(credential));
+  }
+
+  private void listCredentials(HttpExchange exchange) throws IOException {
+    if (!"GET".equals(exchange.getRequestMethod())) {
+      methodNotAllowed(exchange, "GET");
+      return;
+    }
+    ApiCredential credential = requireAuth(exchange);
+    if (credential == null) {
+      return;
+    }
+    if (!requiresScope(exchange, credential, ApiScopes.ADMIN_CREDENTIALS)) {
+      return;
+    }
+    String inbox = queryParam(exchange, "inbox");
+    List<CredentialView> views =
+        credentials.list(inbox).stream().map(CredentialView::from).toList();
+    sendJson(exchange, 200, Map.of("credentials", views));
+  }
+
+  private void issueCredential(HttpExchange exchange, String inboxId) throws IOException {
+    if (!"POST".equals(exchange.getRequestMethod())) {
+      methodNotAllowed(exchange, "POST");
+      return;
+    }
+    ApiCredential issuer = requireAuth(exchange);
+    if (issuer == null) {
+      return;
+    }
+    if (!issuer.allowsInbox(inboxId)) {
+      sendJson(exchange, 403, new ApiError("FORBIDDEN", "token 无权访问该 inbox").body());
+      return;
+    }
+    if (!service.inboxExists(inboxId)) {
+      sendJson(exchange, 404, new ApiError("NOT_FOUND", "inbox 不存在").body());
+      return;
+    }
+    CredentialPolicy.requireCanIssueFor(issuer, inboxId);
+    CredentialIssueRequest request = readCredentialRequest(exchange);
+    if (request == null) {
+      return;
+    }
+    Set<String> scopes =
+        request.scopes() == null
+            ? Set.of()
+            : request.scopes().stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(String::trim)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    Set<String> channels =
+        request.channels() == null
+            ? Set.of()
+            : request.channels().stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(String::trim)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    CredentialPolicy.validateIssuedScopes(issuer, scopes, channels);
+    Instant expiresAt = expiresAt(request.expiresInSeconds());
+    IssuedCredential issued =
+        credentials.issue(
+            request.label(), scopes, inboxId, channels, expiresAt, issuer.id());
+    sendJson(
+        exchange,
+        201,
+        new CredentialIssuedResponse(CredentialView.from(issued.credential()), issued.token()));
+  }
+
+  private void manageCredential(HttpExchange exchange, String credentialId, String action)
+      throws IOException {
+    if (!"POST".equals(exchange.getRequestMethod())) {
+      methodNotAllowed(exchange, "POST");
+      return;
+    }
+    ApiCredential issuer = requireAuth(exchange);
+    if (issuer == null) {
+      return;
+    }
+    ApiCredential target =
+        credentials
+            .findById(credentialId)
+            .orElseThrow(
+                () -> new InboxException(InboxException.Code.NOT_FOUND, "credential 不存在"));
+    CredentialPolicy.requireCanManage(issuer, target);
+    switch (action) {
+      case "rotate" -> {
+        IssuedCredential issued = credentials.rotate(credentialId, issuer.id());
+        sendJson(
+            exchange,
+            200,
+            new CredentialIssuedResponse(CredentialView.from(issued.credential()), issued.token()));
+      }
+      case "revoke" -> {
+        boolean revoked = credentials.revoke(credentialId);
+        sendJson(exchange, 200, Map.of("id", credentialId, "revoked", revoked));
+      }
+      default -> sendJson(exchange, 404, new ApiError("NOT_FOUND", "credential 操作不存在").body());
+    }
+  }
+
+  private CredentialIssueRequest readCredentialRequest(HttpExchange exchange) throws IOException {
+    byte[] body = readBody(exchange);
+    if (body == null) {
+      return null;
+    }
+    if (body.length == 0) {
+      sendJson(exchange, 400, new ApiError("INVALID_JSON", "请求体为空").body());
+      return null;
+    }
+    try {
+      return InboxJson.MAPPER.readValue(body, CredentialIssueRequest.class);
+    } catch (Exception e) {
+      sendJson(exchange, 400, new ApiError("INVALID_JSON", "请求体不是合法 JSON").body());
+      return null;
+    }
+  }
+
+  private static Instant expiresAt(Long expiresInSeconds) {
+    if (expiresInSeconds == null || expiresInSeconds == 0) {
+      return null;
+    }
+    if (expiresInSeconds < 1 || expiresInSeconds > 31_536_000L) {
+      throw new IllegalArgumentException("expiresInSeconds 必须在 1..31536000");
+    }
+    return Instant.now().plusSeconds(expiresInSeconds);
+  }
+
+  private ApiCredential requireAuth(HttpExchange exchange) throws IOException {
+    ApiCredential credential = authenticate(exchange);
+    if (credential == null) {
+      sendJson(exchange, 401, new ApiError("UNAUTHORIZED", "缺少或无效 Bearer token").body());
+    }
+    return credential;
   }
 
   private void push(HttpExchange exchange, String inboxId, ApiCredential credential)
@@ -219,6 +444,132 @@ public final class InboxHttpServer implements AutoCloseable {
             "duplicate", result.duplicate(),
             "revision", result.revision(),
             "createdAt", result.createdAt().toString()));
+  }
+
+  private void listItems(HttpExchange exchange, String inboxId, ApiCredential credential)
+      throws IOException {
+    Set<String> channels = effectiveChannels(channels(exchange), credential);
+    int limit = 50;
+    String rawLimit = queryParam(exchange, "limit");
+    if (rawLimit != null) {
+      try {
+        limit = Integer.parseInt(rawLimit);
+      } catch (NumberFormatException e) {
+        throw new IllegalArgumentException("limit 必须是整数");
+      }
+    }
+    List<ItemSummary> items = service.listAvailable(inboxId, channels, limit);
+    sendJson(exchange, 200, new ItemListResponse(inboxId, items, items.size()));
+  }
+
+  private void claimItems(HttpExchange exchange, String inboxId, ApiCredential credential)
+      throws IOException {
+    ClaimRequest request = readJsonBody(exchange, ClaimRequest.class);
+    if (request == null) {
+      return;
+    }
+    long leaseSeconds = request.leaseSeconds() == null ? 300 : request.leaseSeconds();
+    ClaimResult result =
+        service.claim(
+            inboxId,
+            request.itemIds() == null ? List.of() : request.itemIds(),
+            Duration.ofSeconds(leaseSeconds),
+            claimChannelScope(credential));
+    sendJson(exchange, 200, result);
+  }
+
+  private void routeClaimAction(HttpExchange exchange, String inboxId, String action)
+      throws IOException {
+    if (!"POST".equals(exchange.getRequestMethod())) {
+      methodNotAllowed(exchange, "POST");
+      return;
+    }
+    ApiCredential credential = requireAuth(exchange);
+    if (credential == null) {
+      return;
+    }
+    if (!credential.allowsInbox(inboxId)) {
+      sendJson(exchange, 403, new ApiError("FORBIDDEN", "token 无权访问该 inbox").body());
+      return;
+    }
+    if (!service.inboxExists(inboxId)) {
+      sendJson(exchange, 404, new ApiError("NOT_FOUND", "inbox 不存在").body());
+      return;
+    }
+    if (!requiresScope(exchange, credential, ApiScopes.ITEMS_MANAGE)) {
+      return;
+    }
+    switch (action) {
+      case "renew" -> {
+        RenewRequest request = readJsonBody(exchange, RenewRequest.class);
+        if (request == null) {
+          return;
+        }
+        long leaseSeconds = request.leaseSeconds() == null ? 300 : request.leaseSeconds();
+        RenewResult result =
+            service.renew(
+                inboxId,
+                request.claimTokens() == null ? List.of() : request.claimTokens(),
+                Duration.ofSeconds(leaseSeconds));
+        sendJson(exchange, 200, result);
+      }
+      case "complete" -> {
+        CompleteRequest request = readJsonBody(exchange, CompleteRequest.class);
+        if (request == null) {
+          return;
+        }
+        List<Completion> completions = new java.util.ArrayList<>();
+        if (request.completions() != null) {
+          for (CompletionRequest item : request.completions()) {
+            completions.add(
+                new Completion(
+                    item.claimToken(),
+                    item.outcome() == null || item.outcome().isBlank()
+                        ? CompletionOutcome.COMPLETED
+                        : CompletionOutcome.fromWire(item.outcome()),
+                    item.summary()));
+          }
+        }
+        CompleteResult result = service.complete(inboxId, completions);
+        sendJson(exchange, 200, result);
+      }
+      case "release" -> {
+        ReleaseRequest request = readJsonBody(exchange, ReleaseRequest.class);
+        if (request == null) {
+          return;
+        }
+        ReleaseResult result =
+            service.release(
+                inboxId,
+                request.claimTokens() == null ? List.of() : request.claimTokens());
+        sendJson(exchange, 200, result);
+      }
+      default -> sendJson(exchange, 404, new ApiError("NOT_FOUND", "claim 操作不存在").body());
+    }
+  }
+
+  private <T> T readJsonBody(HttpExchange exchange, Class<T> type) throws IOException {
+    byte[] body = readBody(exchange);
+    if (body == null) {
+      return null;
+    }
+    if (body.length == 0) {
+      sendJson(exchange, 400, new ApiError("INVALID_JSON", "请求体为空").body());
+      return null;
+    }
+    try {
+      return InboxJson.MAPPER.readValue(body, type);
+    } catch (Exception e) {
+      sendJson(exchange, 400, new ApiError("INVALID_JSON", "请求体不是合法 JSON").body());
+      return null;
+    }
+  }
+
+  private static Set<String> claimChannelScope(ApiCredential credential) {
+    if (credential.channels().isEmpty() || credential.channels().contains("*")) {
+      return Set.of();
+    }
+    return credential.channels();
   }
 
   private void status(HttpExchange exchange, String inboxId, ApiCredential credential)
@@ -342,6 +693,24 @@ public final class InboxHttpServer implements AutoCloseable {
     return Set.copyOf(out);
   }
 
+  private String queryParam(HttpExchange exchange, String name) {
+    String raw = exchange.getRequestURI().getRawQuery();
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    for (String pair : raw.split("&")) {
+      int equals = pair.indexOf('=');
+      if (equals < 0) {
+        continue;
+      }
+      String key = URLDecoder.decode(pair.substring(0, equals), StandardCharsets.UTF_8);
+      if (name.equals(key)) {
+        return URLDecoder.decode(pair.substring(equals + 1), StandardCharsets.UTF_8);
+      }
+    }
+    return null;
+  }
+
   private byte[] readBody(HttpExchange exchange) throws IOException {
     String contentLength = exchange.getRequestHeaders().getFirst("Content-Length");
     if (contentLength != null) {
@@ -458,6 +827,53 @@ public final class InboxHttpServer implements AutoCloseable {
       executor = null;
     }
   }
+
+  record ItemListResponse(String inbox, List<ItemSummary> items, int count) {}
+
+  record ClaimRequest(List<String> itemIds, Long leaseSeconds) {}
+
+  record RenewRequest(List<String> claimTokens, Long leaseSeconds) {}
+
+  record CompletionRequest(String claimToken, String outcome, String summary) {}
+
+  record CompleteRequest(List<CompletionRequest> completions) {}
+
+  record ReleaseRequest(List<String> claimTokens) {}
+
+  record CredentialIssueRequest(
+      String label, List<String> scopes, List<String> channels, Long expiresInSeconds) {}
+
+  record CredentialView(
+      String id,
+      String label,
+      Set<String> scopes,
+      String inbox,
+      Set<String> channels,
+      String fingerprint,
+      String createdAt,
+      String expiresAt,
+      String lastUsedAt,
+      String revokedAt,
+      String rotatedFrom,
+      String createdBy) {
+    static CredentialView from(ApiCredential credential) {
+      return new CredentialView(
+          credential.id(),
+          credential.label(),
+          credential.scopes(),
+          credential.inboxId(),
+          credential.channels(),
+          credential.fingerprint(),
+          credential.createdAt() == null ? null : credential.createdAt().toString(),
+          credential.expiresAt() == null ? null : credential.expiresAt().toString(),
+          credential.lastUsedAt() == null ? null : credential.lastUsedAt().toString(),
+          credential.revokedAt() == null ? null : credential.revokedAt().toString(),
+          credential.rotatedFrom(),
+          credential.createdBy());
+    }
+  }
+
+  record CredentialIssuedResponse(CredentialView credential, String token) {}
 
   record PushRequest(
       String channel,

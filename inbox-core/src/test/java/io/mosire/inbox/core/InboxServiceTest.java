@@ -90,7 +90,7 @@ class InboxServiceTest {
     int expired;
 
     @Override public void initialize() {}
-    @Override public void createInbox(String inboxId) {}
+    @Override public boolean createInbox(String inboxId) { return true; }
     @Override public boolean inboxExists(String inboxId) { return true; }
 
     @Override

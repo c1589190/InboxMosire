@@ -13,7 +13,8 @@ import java.util.Set;
 public interface InboxStore extends AutoCloseable {
   void initialize();
 
-  void createInbox(String inboxId);
+  /** @return true if created, false if it already existed. */
+  boolean createInbox(String inboxId);
 
   boolean inboxExists(String inboxId);
 
@@ -25,6 +26,19 @@ public interface InboxStore extends AutoCloseable {
       String inboxId, Set<String> channels, int limit, Instant now);
 
   ClaimResult claim(String inboxId, List<String> itemIds, Duration lease, Instant now);
+
+  /**
+   * 领取时额外按调用方可见 channel 收窄；空集 = 不限。
+   * 默认实现保持旧存储实现兼容。
+   */
+  default ClaimResult claim(
+      String inboxId,
+      List<String> itemIds,
+      Duration lease,
+      Instant now,
+      Set<String> allowedChannels) {
+    return claim(inboxId, itemIds, lease, now);
+  }
 
   RenewResult renew(String inboxId, List<String> claimTokens, Duration lease, Instant now);
 

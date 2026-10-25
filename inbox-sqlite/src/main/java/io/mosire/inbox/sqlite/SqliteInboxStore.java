@@ -173,7 +173,7 @@ public final class SqliteInboxStore implements InboxStore {
   }
 
   @Override
-  public void createInbox(String inboxId) {
+  public boolean createInbox(String inboxId) {
     lock.lock();
     try (PreparedStatement ps =
         connection.prepareStatement(
@@ -186,7 +186,7 @@ public final class SqliteInboxStore implements InboxStore {
       ps.setString(1, inboxId);
       ps.setString(2, now);
       ps.setString(3, now);
-      ps.executeUpdate();
+      return ps.executeUpdate() == 1;
     } catch (SQLException e) {
       throw SqliteSupport.internal("创建 inbox 失败", e);
     } finally {
@@ -326,6 +326,16 @@ public final class SqliteInboxStore implements InboxStore {
 
   @Override
   public ClaimResult claim(String inboxId, List<String> itemIds, Duration lease, Instant now) {
+    return claim(inboxId, itemIds, lease, now, Set.of());
+  }
+
+  @Override
+  public ClaimResult claim(
+      String inboxId,
+      List<String> itemIds,
+      Duration lease,
+      Instant now,
+      Set<String> allowedChannels) {
     return inTransaction(
         () -> {
           long revision = requireInboxRevisionLocked(inboxId);
@@ -346,6 +356,10 @@ public final class SqliteInboxStore implements InboxStore {
               try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) {
                   rejected.add(new ClaimRejection(itemId, "ITEM_NOT_FOUND", "通知不存在"));
+                  continue;
+                }
+                if (!allowedChannels.isEmpty() && !allowedChannels.contains(rs.getString("channel"))) {
+                  rejected.add(new ClaimRejection(itemId, "ITEM_UNAVAILABLE", "通知不在 token 的 channel 范围内"));
                   continue;
                 }
                 if (!"available".equals(rs.getString("status"))) {

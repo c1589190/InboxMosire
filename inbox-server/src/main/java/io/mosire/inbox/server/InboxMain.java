@@ -2,11 +2,13 @@ package io.mosire.inbox.server;
 
 import io.mosire.inbox.core.InboxService;
 import io.mosire.inbox.core.InboxStatus;
+import io.mosire.inbox.sqlite.ApiCredential;
 import io.mosire.inbox.sqlite.IssuedCredential;
 import io.mosire.inbox.sqlite.SqliteDatabase;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -108,8 +110,8 @@ public final class InboxMain {
 
   private static int token(Args args) throws Exception {
     String sub = args.positional();
+    Path dataDir = dataDir(args);
     if ("issue".equals(sub)) {
-      Path dataDir = dataDir(args);
       String label = args.required("label");
       String inbox = args.get("inbox", "main");
       Set<String> scopes = new LinkedHashSet<>(args.all("scope"));
@@ -118,26 +120,82 @@ public final class InboxMain {
         return 2;
       }
       Set<String> channels = new LinkedHashSet<>(args.all("channel"));
+      Instant expiresAt = expiry(args);
       try (SqliteDatabase db = SqliteDatabase.open(dataDir.resolve("inbox.db"))) {
         IssuedCredential issued =
-            db.credentials().issue(label, scopes, inbox, channels);
-        System.out.println("credential_id=" + issued.credential().id());
-        System.out.println("token=" + issued.token());
-        System.out.println("只显示这一次；请放进 DSH/adapter 的本机 secret 配置。");
+            db.credentials().issue(label, scopes, inbox, channels, expiresAt, "cli");
+        printIssued(issued);
+        return 0;
+      }
+    }
+    if ("list".equals(sub)) {
+      String inbox = args.get("inbox", null);
+      try (SqliteDatabase db = SqliteDatabase.open(dataDir.resolve("inbox.db"))) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("credentials", db.credentials().list(inbox).stream().map(InboxMain::credentialMap).toList());
+        System.out.println(InboxJson.MAPPER.writeValueAsString(result));
+        return 0;
+      }
+    }
+    if ("rotate".equals(sub)) {
+      String id = args.required("id");
+      try (SqliteDatabase db = SqliteDatabase.open(dataDir.resolve("inbox.db"))) {
+        IssuedCredential issued = db.credentials().rotate(id, "cli");
+        printIssued(issued);
         return 0;
       }
     }
     if ("revoke".equals(sub)) {
       String id = args.required("id");
-      Path dataDir = dataDir(args);
       try (SqliteDatabase db = SqliteDatabase.open(dataDir.resolve("inbox.db"))) {
         boolean revoked = db.credentials().revoke(id);
         System.out.println(revoked ? "已撤销: " + id : "未找到或已撤销: " + id);
         return revoked ? 0 : 1;
       }
     }
-    System.err.println("用法: token issue ... | token revoke --id <credential_id>");
+    System.err.println("用法: token issue|list|rotate|revoke ...");
     return 2;
+  }
+
+  private static void printIssued(IssuedCredential issued) throws Exception {
+    System.out.println("credential_id=" + issued.credential().id());
+    System.out.println("fingerprint=" + issued.credential().fingerprint());
+    System.out.println("token=" + issued.token());
+    System.out.println("只显示这一次；请放进本机 secret 配置。");
+  }
+
+  private static Map<String, Object> credentialMap(ApiCredential c) {
+    Map<String, Object> map = new LinkedHashMap<>();
+    map.put("id", c.id());
+    map.put("label", c.label());
+    map.put("scopes", c.scopes());
+    map.put("inbox", c.inboxId());
+    map.put("channels", c.channels());
+    map.put("fingerprint", c.fingerprint());
+    map.put("createdAt", c.createdAt() == null ? null : c.createdAt().toString());
+    map.put("expiresAt", c.expiresAt() == null ? null : c.expiresAt().toString());
+    map.put("lastUsedAt", c.lastUsedAt() == null ? null : c.lastUsedAt().toString());
+    map.put("revokedAt", c.revokedAt() == null ? null : c.revokedAt().toString());
+    map.put("rotatedFrom", c.rotatedFrom());
+    map.put("createdBy", c.createdBy());
+    return map;
+  }
+
+  private static Instant expiry(Args args) {
+    String raw = args.get("expires-in-seconds", null);
+    if (raw == null) {
+      return null;
+    }
+    long seconds;
+    try {
+      seconds = Long.parseLong(raw);
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException("--expires-in-seconds 必须是整数");
+    }
+    if (seconds < 1 || seconds > 31_536_000L) {
+      throw new IllegalArgumentException("--expires-in-seconds 必须在 1..31536000");
+    }
+    return Instant.now().plusSeconds(seconds);
   }
 
   private static int doctor(Args args) throws Exception {
@@ -233,14 +291,23 @@ public final class InboxMain {
                        [--sse-heartbeat-seconds 15] [--default-inbox main]
           inboxd inbox create --id <id> [--data-dir <dir>]
           inboxd token issue --label <label> --scope <scope> [--scope ...]
-                           [--inbox main] [--channel <channel> ...] [--data-dir <dir>]
+                           [--inbox main] [--channel <channel> ...]
+                           [--expires-in-seconds N] [--data-dir <dir>]
+          inboxd token list [--inbox main] [--data-dir <dir>]
+          inboxd token rotate --id <credential_id> [--data-dir <dir>]
           inboxd token revoke --id <credential_id> [--data-dir <dir>]
           inboxd doctor [--data-dir <dir>]
 
         scopes:
-          items:write   producer push
-          events:read   SSE event stream
-          status:read   board snapshot
+          items:write              producer push
+          items:read               list available items
+          items:manage             claim/renew/complete/release
+          events:read              SSE event stream
+          status:read              board snapshot
+          inbox:ensure             ensure exact-bound inbox exists
+          credentials:issue:self   issue child credentials for exact-bound inbox
+          admin:inboxes            create/ensure any inbox
+          admin:credentials        manage any credential
 
         安全: v1 只允许 127.0.0.1/localhost。token 只显示一次，不写日志。
         """);
