@@ -311,6 +311,8 @@ GET  /v1/admin/whoami
 - Phase 4 DSH 多 binding：⏳ 交给 `InboxMosire-DSH`。
 - Phase 5 端到端：⏳ 等 DSH v2。
 
+补充（2026-10-25）：advisory occupancy 已先完成。它只是 `occupied/occupiedBy` 提示，不提供访问锁；访问控制仍由 token scope 决定。
+
 ### Phase 0：契约冻结
 
 - 冻结 `BindingDescriptor`

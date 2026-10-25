@@ -366,3 +366,75 @@ channel-scoped `items:read` / `items:manage` token 只能看到并 claim 自己 
 - SSE/wake/日志不得包含 token；
 - credential rotation 后旧 token 立即失效；
 - admin credential 不自动适用于普通程序 MCP proxy。
+
+---
+
+# v1.2 增补：Advisory Inbox Occupancy
+
+占用是**提示状态**，不是访问锁。token scope 仍是唯一访问边界；任何持有对应 scope/token 的调用方仍可继续访问 inbox。
+
+## Scope
+
+新增：
+
+```text
+inbox:occupy
+```
+
+- GET occupancy 使用 `status:read`
+- PUT/DELETE occupancy 使用 `inbox:occupy`
+
+## 查询
+
+```http
+GET /v1/inboxes/{inbox}/occupancy
+Authorization: Bearer <status-read-token>
+```
+
+```json
+{
+  "inboxId": "app-a",
+  "occupied": true,
+  "occupiedBy": "dsh-session-S1",
+  "occupiedAt": "2026-10-25T00:00:00Z",
+  "updatedAt": "2026-10-25T00:00:00Z"
+}
+```
+
+## 标记占用
+
+```http
+PUT /v1/inboxes/{inbox}/occupancy
+Authorization: Bearer <inbox-occupy-token>
+Content-Type: application/json
+
+{"occupiedBy":"dsh-session-S1"}
+```
+
+幂等：已占用时保留第一个 occupant，不覆盖；用于展示。
+
+## 清除占用
+
+```http
+DELETE /v1/inboxes/{inbox}/occupancy
+Authorization: Bearer <inbox-occupy-token>
+```
+
+## status 集成
+
+`GET /v1/inboxes/{inbox}/status` 额外返回：
+
+```json
+{
+  "occupied": true,
+  "occupiedBy": "dsh-session-S1",
+  "occupiedAt": "..."
+}
+```
+
+## 生命周期
+
+- daemon 启动时清空所有 occupancy，因为占用表示“当前活着的连接/会话”；
+- occupancy 变化不推进 revision、不产生 SSE 事件；
+- DSH adapter 在 bind 成功后 PUT occupancy，在 unbind/session-stop 后 DELETE occupancy；
+- 其他调用方不会因为 occupied=true 被服务端拒绝；是否尊重占用由调用方/上层策略决定。

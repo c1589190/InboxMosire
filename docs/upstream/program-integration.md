@@ -53,6 +53,7 @@ items:read
 items:manage
 status:read
 events:read
+inbox:occupy
 ```
 
 精确绑定到目标 inbox，例如 `app-a`。
@@ -73,7 +74,7 @@ InboxModels.IssuedCredentialView issued = provisioner.issueCredential(
     "app-a",
     new InboxModels.CredentialIssueRequest(
         "program-a-mcp",
-        Set.of("items:write", "items:read", "items:manage", "status:read"),
+        Set.of("items:write", "items:read", "items:manage", "status:read", "inbox:occupy"),
         Set.of(),
         86400L));
 
@@ -110,6 +111,9 @@ AgentToMcpServer server = AgentToMcpServer.startHttp(
 - `inbox_complete`
 - `inbox_release`
 - `inbox_push`
+- `inbox_occupancy`
+- `inbox_occupy`
+- `inbox_vacate`
 - `inbox_credential_info`（只返回 metadata/fingerprint，不返回 raw token）
 
 程序还可以把自己的业务工具注册到同一个 ToolRegistry。
@@ -138,6 +142,18 @@ InboxModels.BindingDescriptor binding = provisioner.issueBinding(
 ```
 
 `adapterTokenRef` 指向本地 `0600` secret 文件，不包含 token 原文。程序通过自己的 MCP 工具把这个 descriptor 返回给目标会话；目标会话再把 descriptor 交给 DSH adapter 的 bind 工具。
+
+`issueBinding` 签发的 wake token 包含 `status:read`、`events:read`、`inbox:occupy`，因此 DSH adapter 可以在 bind/unbind 时维护 advisory occupancy。
+
+程序也可以直接维护占用：
+
+```java
+programClient.occupy("app-a", "session-S1");
+InboxModels.Occupancy occupancy = programClient.occupancy("app-a");
+programClient.vacate("app-a");
+```
+
+occupancy 不是独占锁：它只是 `occupied/occupiedBy` 提示，其他合法 token 持有者仍可访问。
 
 ## 3. HTTP 端点
 

@@ -4,7 +4,7 @@
 - 分支：`main`
 - 版本：`0.1.0-SNAPSHOT`
 - 阶段：后端多程序接入 v2 完成；等待 `InboxMosire-DSH` 多 binding 升级
-- 最近代码提交：`bc6b239 feat: 增加多 inbox provision、credential 管理与共享客户端/MCP 工具面`
+- 最近代码提交：`ca3bba9 feat: 增加 advisory inbox 占用状态、HTTP/客户端/MCP 支持与测试`
 
 ## 已完成
 
@@ -32,8 +32,13 @@
   - credential issue/list/rotate/revoke/whoAmI
   - SSE stream
 - 程序自有 MCP `inbox-mcp-tools-client`：
-  - 8 个工具，包含 `inbox_credential_info`（仅 metadata）
+  - 11 个工具，包含 occupancy 三件套和 `inbox_credential_info`（仅 metadata）
   - 不返回 raw token
+- Advisory inbox occupancy：
+  - `GET/PUT/DELETE /v1/inboxes/{inbox}/occupancy`
+  - scope `inbox:occupy`
+  - status 返回 `occupied/occupiedBy/occupiedAt`
+  - 占用不阻塞其他合法 token；daemon 启动清空旧占用
 - 服务端 HTTP action endpoints：
   - `GET /items`
   - `POST /claims`
@@ -50,8 +55,9 @@
 结果：
 
 - `BUILD SUCCESS`
-- Tests run: **27**，Failures 0, Errors 0, Skipped 0
+- Tests run: **28**，Failures 0, Errors 0, Skipped 0
 - Checkstyle：所有模块 0 violations
+- Maven install 成功，共享库已安装到 `~/.m2`
 - 真实 live 验证：
   - 旧 SQLite schema 自动迁移，旧 token 仍可认证；
   - `inbox-client` 真程序创建 `app-a`/`app-b`；
@@ -63,6 +69,11 @@
 - 共享库已安装到本地 Maven 仓库：
   - `io.mosire:inbox-client:0.1.0-SNAPSHOT`
   - `io.mosire:inbox-mcp-tools-client:0.1.0-SNAPSHOT`
+- occupancy live 验证：
+  - program token 占用 app-a 后 status 显示 occupied；
+  - 另一个合法 status token 仍返回 200（advisory，不阻断）；
+  - wake token 可读取并清除占用；
+  - 清理后 app-a/app-b 仍各有 1 条 available item。
 
 ## live 实例
 

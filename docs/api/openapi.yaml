@@ -536,6 +536,79 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+  /v1/inboxes/{inbox}/occupancy:
+    get:
+      tags:
+      - Adapter
+      operationId: getOccupancy
+      summary: Read the advisory inbox occupancy marker.
+      description: Requires `status:read`. Occupancy is advisory and is not an access lock; token scopes remain the access
+        boundary.
+      parameters:
+      - $ref: '#/components/parameters/Inbox'
+      responses:
+        '200':
+          description: Occupancy marker.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxOccupancy'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags:
+      - Adapter
+      operationId: occupyInbox
+      summary: Mark an inbox occupied. Idempotent; does not block other token holders.
+      description: Requires `inbox:occupy`. The first occupant is retained until DELETE. This is informational only.
+      parameters:
+      - $ref: '#/components/parameters/Inbox'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OccupyInboxRequest'
+      responses:
+        '200':
+          description: Current occupancy marker.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxOccupancy'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+    delete:
+      tags:
+      - Adapter
+      operationId: vacateInbox
+      summary: Clear the advisory inbox occupancy marker.
+      description: Requires `inbox:occupy`.
+      parameters:
+      - $ref: '#/components/parameters/Inbox'
+      responses:
+        '200':
+          description: Cleared occupancy marker.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxOccupancy'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
 components:
   securitySchemes:
     bearerAuth:
@@ -543,8 +616,8 @@ components:
       scheme: bearer
       bearerFormat: opaque
       description: 'Locally issued opaque token. Scopes: items:write, items:read, items:manage, status:read, events:read,
-        inbox:ensure, credentials:issue:self, admin:inboxes, admin:credentials. Tokens are shown only at issue/rotate and
-        stored as SHA-256 hashes.'
+        inbox:ensure, inbox:occupy, credentials:issue:self, admin:inboxes, admin:credentials. Occupancy is advisory; scopes
+        are the access boundary.'
   parameters:
     Inbox:
       name: inbox
@@ -685,6 +758,17 @@ components:
             $ref: '#/components/schemas/ChannelCounts'
         updatedAt:
           type: string
+          format: date-time
+        occupied:
+          type: boolean
+        occupiedBy:
+          type:
+          - string
+          - 'null'
+        occupiedAt:
+          type:
+          - string
+          - 'null'
           format: date-time
     ErrorEnvelope:
       type: object
@@ -1094,3 +1178,35 @@ components:
           type: string
         revoked:
           type: boolean
+    InboxOccupancy:
+      type: object
+      required:
+      - inboxId
+      - occupied
+      properties:
+        inboxId:
+          type: string
+        occupied:
+          type: boolean
+        occupiedBy:
+          type:
+          - string
+          - 'null'
+        occupiedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        updatedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    OccupyInboxRequest:
+      type: object
+      properties:
+        occupiedBy:
+          type:
+          - string
+          - 'null'
+          maxLength: 200

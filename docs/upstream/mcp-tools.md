@@ -282,6 +282,9 @@ registry.registerAll(new InboxClientMcpTools(programClient, "app-a").all());
 - `inbox_complete`
 - `inbox_release`
 - `inbox_push`
+- `inbox_occupancy`
+- `inbox_occupy`
+- `inbox_vacate`
 - `inbox_credential_info`
 
 与中心 MCP 工具的区别：
@@ -290,6 +293,7 @@ registry.registerAll(new InboxClientMcpTools(programClient, "app-a").all());
 - 可被程序自己的 MCP server 和程序业务工具放在一起；
 - token 留在程序进程/secret source，不进入工具参数；
 - `inbox_credential_info` 只返回 metadata/fingerprint，不返回 raw token；
+- `inbox_occupancy` / `inbox_occupy` / `inbox_vacate` 只维护 advisory 占用标记；不阻塞其他 token 持有者；
 - claim token 仍会出现在 claim 结果中，因为它是 Agent 处理对应 item 的能力凭证。
 
 目标会话在 Mode A 下只调用程序自有 MCP；DSH adapter 只负责 SSE + wake。

@@ -65,6 +65,7 @@ java -jar inbox-server/target/inbox-server-0.1.0-SNAPSHOT-all.jar serve --data-d
 - Producer / Adapter 使用 `Authorization: Bearer`，token 不以任何形式放在 URL。
 - token 只存 SHA-256 hash；日志不记录 token、payload 和 claim token。
 - SSE 事件不含通知正文、标题、claim token。
+- 每个 inbox 有 advisory `occupied/occupiedBy` 标记；它不是独占锁，访问边界仍由 token 控制。
 - Agent 操作 MCP 不需要知道宿主 session；claim capability 负责所有权。
 
 ## License
