@@ -88,7 +88,11 @@ wake 摘要每一行使用：
 
 ## 3. 程序 MCP 的新能力
 
-目标 Agent 使用的程序自有 MCP（`io.mosire:inbox-mcp-tools-client`）现在是 15 个工具，新增：
+目标 Agent 使用的程序自有 MCP（`io.mosire:inbox-mcp-tools-client`）现在是 16 个工具，新增：
+
+```text
+inbox_rest
+```
 
 ```text
 inbox_view

@@ -21,6 +21,7 @@
 | 工具 | 作用 |
 |---|---|
 | `inbox_status` | revision 与各 channel 计数 |
+| `inbox_rest` | 设置当前 adapter/session 的休息秒数，不修改 item |
 | `inbox_list` | 列出 available item 的轻量摘要 |
 | `inbox_claim` | 原子领取一个或多个 item |
 | `inbox_renew` | 续 claim lease |
@@ -368,8 +369,8 @@ append 使用换行连接旧 content。结构化内容需要程序自己序列�
 
 ## 当前工具数量
 
-- 中心后端 MCP：11 个（原 7 个 + view/update/append/delete）
-- 程序自有 `inbox-mcp-tools-client`：15 个（中心 11 个 + occupancy 3 个 + credential_info 1 个）
+- 中心后端 MCP：12 个（原 7 个 + view/update/append/delete + rest）
+- 程序自有 `inbox-mcp-tools-client`：16 个（中心 12 个 + occupancy 3 个 + credential_info 1 个）
 
 ## 兼容和边界
 
@@ -397,7 +398,19 @@ MCP 工具结果仍用 code + message；message 会附安全 details。程序自
 - done: `itemStatus=done`, `allowedActions=[]`
 - stale available: `expectedRevision`, `actualRevision`, `itemStatus=available`
 
-## v1.7 restSeconds（DSH adapter hint）
+## v1.7 restSeconds / inbox_rest（DSH adapter hint）
+
+推荐 Agent 直接调用：
+
+```json
+{"inbox":"app-a","restSeconds":60}
+```
+
+`inbox_rest` 是项目提供的标准 MCP 工具；它不修改 item，也不调用 Inbox HTTP，返回
+`scope=adapter-session`，由当前 session 的 adapter 观察并应用。`0` 表示清除休息，
+最大 `86400` 秒。
+
+`inbox_complete` / `inbox_delete` 也接受可选 `restSeconds`，用于完成即休息。
 
 `inbox_complete` 和 `inbox_delete` 的 MCP schema 接受可选：
 
@@ -413,3 +426,15 @@ adapter 在成功完成后设置 session 级休息。`0` 表示清除休息，�
 - DSH adapter 在休息期间不拉 status/summary，也不 followup；
 - 到期后按最新 revision 最多补一次 wake；
 - Bot 的 `bot_thread_ack` 需要单独增加同名可选参数，才能让 Bot 流程携带休息。
+
+### `inbox_rest`
+
+```json
+{"inbox":"main","restSeconds":60}
+```
+
+- `restSeconds` 必填，0..86400；
+- 0 清除休息；
+- 不修改任何 item，不需要 claim；
+- 返回 `scope=adapter-session`；
+- 由当前 session 的宿主 adapter 解释；其他 binding 不受影响。

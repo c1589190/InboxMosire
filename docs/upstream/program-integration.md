@@ -272,10 +272,11 @@ inbox_append
 inbox_delete
 ```
 
-完整工具（15 个）：
+完整工具（16 个）：
 
 ```text
 inbox_status
+inbox_rest
 inbox_list
 inbox_view
 inbox_update
@@ -343,6 +344,12 @@ catch (InboxClientException e) {
 
 ## v1.7 休息提示
 
-程序自己的完成工具（例如 `bot_thread_ack`）如需支持休息，增加可选
-`restSeconds` 参数并把成功结果正常返回；DSH adapter 会观察成功结果并设置当前
-binding 的 `restUntil`。Inbox core 不保存或执行休息状态。
+优先调用项目自带的 `inbox_rest`（`InboxClientMcpTools` 已包含）：
+
+```json
+{"restSeconds":60}
+```
+
+这样无需修改程序的 ack 工具；DSH adapter 会观察成功结果并设置当前 binding 的
+`restUntil`。如果程序想让完成工具直接带休息，也可以在自定义工具上增加可选
+`restSeconds`。Inbox core 不保存或执行休息状态。

@@ -204,7 +204,8 @@ summary : 短摘要
 content : 不透明完整内容（文本/Markdown/JSON 字符串均可）
 ```
 
-- 程序自有 MCP 现在有 15 个工具，新增：
+- 程序自有 MCP 现在有 16 个工具，新增：
+  - `inbox_rest`：设置当前 adapter/session 的休息秒数；
   - `inbox_view`：读 summary + content，不 claim；
   - `inbox_update`：修改 summary/content/contentRef/kind/priority；
   - `inbox_append`：追加 content 文本；
