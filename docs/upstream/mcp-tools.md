@@ -379,3 +379,20 @@ append 使用换行连接旧 content。结构化内容需要程序自己序列�
 - update/append/delete 只允许 `available` item；claimed item 返回 409。
 - 修改会推进 revision 并产生 event，下一次 wake 摘要会更新。
 - content 不会被核心解释为链接或自动工具调用。
+
+## v1.5 Item 冲突错误
+
+`inbox_update` / `inbox_append` / `inbox_delete` 的 409 现在区分：
+
+```text
+ITEM_STATUS_CONFLICT
+ITEM_REVISION_CONFLICT
+```
+
+MCP 工具结果仍用 code + message；message 会附安全 details。程序自有客户端应保留
+`InboxClientException.details()`，Bot/程序包装层不要把所有 409 都压成同一个
+`INBOX_CONFLICT`。
+
+- claimed: `itemStatus=claimed`, `allowedActions=[complete,release]`
+- done: `itemStatus=done`, `allowedActions=[]`
+- stale available: `expectedRevision`, `actualRevision`, `itemStatus=available`

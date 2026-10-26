@@ -325,3 +325,18 @@ client.deleteItem("app-a", itemId, null);
 
 - `title/payload/payloadRef` 仍作为输入/输出别名；
 - 新程序应使用 `summary/content/contentRef`。
+
+## v1.5 冲突错误
+
+`InboxClient` 的 `update`/`append`/`deleteItem` 在 HTTP 409 时会保留：
+
+```java
+catch (InboxClientException e) {
+    e.code();     // ITEM_STATUS_CONFLICT / ITEM_REVISION_CONFLICT
+    e.details();  // itemStatus, allowedActions, expectedRevision, actualRevision
+}
+```
+
+- `ITEM_STATUS_CONFLICT`：item 已 claimed 或 done，不要重试同一删除；
+- `ITEM_REVISION_CONFLICT`：重新 view 取得当前 revision 后再处理；
+- 程序包装层不要把所有 409 都统一成同一个 `INBOX_CONFLICT`。

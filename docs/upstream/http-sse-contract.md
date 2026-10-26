@@ -528,3 +528,47 @@ APPEND：
 - `title` 继续作为 `summary` 的 legacy alias 返回；
 - `payload`/`payloadRef` 继续被接受为 `content`/`contentRef` 的旧输入别名；
 - 新客户端和 MCP 工具应使用 `summary/content/contentRef`。
+
+---
+
+# v1.5 增补：可机器处理的 Item 冲突
+
+修改/删除通知时，`409` 不再只有笼统的 `CONFLICT`：
+
+```json
+{
+  "error": {
+    "code": "ITEM_STATUS_CONFLICT",
+    "message": "item 当前状态不允许该操作",
+    "details": {
+      "itemStatus": "claimed",
+      "allowedActions": ["complete", "release"]
+    }
+  }
+}
+```
+
+```json
+{
+  "error": {
+    "code": "ITEM_REVISION_CONFLICT",
+    "message": "item revision 不匹配",
+    "details": {
+      "expectedRevision": 41,
+      "actualRevision": 42,
+      "itemStatus": "available"
+    }
+  }
+}
+```
+
+状态规则：
+
+- `claimed` update/append/delete -> `ITEM_STATUS_CONFLICT`，允许 `complete/release`；
+- `done` update/append/delete -> `ITEM_STATUS_CONFLICT`，`itemStatus=done`；
+- `available` 但 `expectedRevision` 不匹配 -> `ITEM_REVISION_CONFLICT`；
+- `view` 已归档 item 仍是 `404 NOT_FOUND`；
+- HTTP 状态仍为 `409`；
+- details 不包含 token、payload、content 或正文。
+
+客户端必须保留 `details`，不要只解析 `code/message`。

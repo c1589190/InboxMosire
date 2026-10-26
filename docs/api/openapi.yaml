@@ -638,7 +638,8 @@ paths:
       - Producer
       operationId: updateItem
       summary: Replace mutable item fields.
-      description: Requires `items:manage`. Only available items may be updated; claimed items return 409 CONFLICT.
+      description: Requires `items:manage`. Only available items may be updated; claimed/done items return 409 ITEM_STATUS_CONFLICT;
+        stale expectedRevision returns ITEM_REVISION_CONFLICT.
       parameters:
       - $ref: '#/components/parameters/Inbox'
       - $ref: '#/components/parameters/ItemId'
@@ -674,7 +675,7 @@ paths:
       - Producer
       operationId: deleteItem
       summary: Archive/delete an available item.
-      description: Requires `items:manage`. Claimed items return 409 CONFLICT; use complete for claimed work.
+      description: Requires `items:manage`. Claimed/done items return 409 ITEM_STATUS_CONFLICT; use complete for claimed work.
       parameters:
       - $ref: '#/components/parameters/Inbox'
       - $ref: '#/components/parameters/ItemId'
@@ -948,8 +949,18 @@ components:
               - PAYLOAD_TOO_LARGE
               - UNSUPPORTED_MEDIA_TYPE
               - INTERNAL
+              - CONFLICT
+              - UNAVAILABLE
+              - ITEM_STATUS_CONFLICT
+              - ITEM_REVISION_CONFLICT
+              - CLAIM_INVALID
+              - CLAIM_EXPIRED
             message:
               type: string
+            details:
+              type: object
+              additionalProperties: true
+              description: Safe machine-readable details; never contains tokens, payload, or content.
     CloudEventInboxChanged:
       type: object
       required:
