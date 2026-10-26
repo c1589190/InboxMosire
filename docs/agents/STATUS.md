@@ -108,7 +108,7 @@
   - `hasBusinessTools` 识别 `inbox_view`（含 MCP 前缀）；
   - `inbox_adapter_status` 主动刷新 `programMcp`，不必等下一次 wake；
   - 新增 `docs/PROGRAM-MCP-ATTACH.md`，说明 connector scope/URL/Bearer；
-  - DSH 代码在 `6b71f6b`，已本地提交，待推送。
+  - DSH 代码在 `6b71f6b`，已提交并推送。
 - Bot 侧待做：
   - `InboxClientDigestPort.mapFailure` 区分 `ITEM_STATUS_CONFLICT` / `ITEM_REVISION_CONFLICT`；
   - `BotThreadAckTool` 不要所有异常都压成 `INBOX_CONFLICT`；
