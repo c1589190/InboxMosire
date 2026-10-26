@@ -105,7 +105,7 @@ public final class InboxHttpServer implements AutoCloseable {
       }
       route(exchange, path);
     } catch (InboxException e) {
-      sendJson(exchange, statusFor(e.code()), new ApiError(e.code().name(), e.getMessage()).body());
+      sendJson(exchange, statusFor(e.code()), new ApiError(e.code().name(), e.getMessage(), e.details()).body());
     } catch (SecurityException e) {
       sendJson(exchange, 403, new ApiError("FORBIDDEN", e.getMessage()).body());
     } catch (IllegalArgumentException e) {
@@ -946,7 +946,7 @@ public final class InboxHttpServer implements AutoCloseable {
     return switch (code) {
       case INVALID_ARGUMENT -> 422;
       case NOT_FOUND -> 404;
-      case CONFLICT -> 409;
+      case CONFLICT, ITEM_STATUS_CONFLICT, ITEM_REVISION_CONFLICT -> 409;
       case UNAVAILABLE -> 409;
       case CLAIM_INVALID, CLAIM_EXPIRED -> 409;
       case INTERNAL -> 500;

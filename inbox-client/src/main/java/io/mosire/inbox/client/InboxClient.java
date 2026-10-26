@@ -1,5 +1,6 @@
 package io.mosire.inbox.client;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -420,6 +421,7 @@ public final class InboxClient {
   private static InboxClientException error(int status, byte[] body) {
     String code = "HTTP_" + status;
     String message = "InboxMosire 请求失败";
+    Map<String, Object> details = Map.of();
     if (body != null && body.length > 0) {
       try {
         JsonNode root = JSON.readTree(body);
@@ -427,12 +429,18 @@ public final class InboxClient {
         if (!error.isMissingNode()) {
           code = error.path("code").asText(code);
           message = error.path("message").asText(message);
+          JsonNode detailNode = error.path("details");
+          if (detailNode.isObject()) {
+            details =
+                JSON.convertValue(
+                    detailNode, new TypeReference<Map<String, Object>>() {});
+          }
         }
       } catch (IOException ignored) {
         // 不回显服务端原始响应，避免意外包含敏感内容。
       }
     }
-    return new InboxClientException(status, code, message);
+    return new InboxClientException(status, code, message, details);
   }
 
   private static URI normalizeBaseUri(URI value) {

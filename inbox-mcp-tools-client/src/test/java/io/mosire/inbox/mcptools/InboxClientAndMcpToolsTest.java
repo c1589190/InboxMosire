@@ -2,6 +2,7 @@ package io.mosire.inbox.mcptools;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -311,15 +312,65 @@ class InboxClientAndMcpToolsTest {
               "app-a",
               InboxModels.PushItem.builder("ticket").summary("claimed").build());
       client.claim("app-a", List.of(claimedTarget.itemId()), Duration.ofSeconds(60));
-      assertThatThrownBy(
+      InboxClientException claimedError =
+          catchThrowableOfType(
               () ->
                   client.update(
                       "app-a",
                       claimedTarget.itemId(),
-                      new InboxModels.UpdateItem("nope", null, null, null, null, null)))
-          .isInstanceOf(InboxClientException.class)
-          .extracting(error -> ((InboxClientException) error).statusCode())
-          .isEqualTo(409);
+                      new InboxModels.UpdateItem("nope", null, null, null, null, null)),
+              InboxClientException.class);
+      assertThat(claimedError.statusCode()).isEqualTo(409);
+      assertThat(claimedError.code()).isEqualTo("ITEM_STATUS_CONFLICT");
+      assertThat(claimedError.details())
+          .containsEntry("itemStatus", "claimed")
+          .containsKey("allowedActions");
+      assertThat(claimedError.details().get("allowedActions").toString())
+          .contains("complete", "release");
+      assertThat(claimedError.getMessage()).doesNotContain("initial content");
+
+      InboxModels.PushResult staleTarget =
+          client.push(
+              "app-a",
+              InboxModels.PushItem.builder("ticket").summary("stale target").build());
+      InboxModels.ItemDetail staleView = client.view("app-a", staleTarget.itemId());
+      InboxClientException revisionError =
+          catchThrowableOfType(
+              () ->
+                  client.update(
+                      "app-a",
+                      staleTarget.itemId(),
+                      new InboxModels.UpdateItem(
+                          "stale update", null, null, null, null, staleView.revision() + 1)),
+              InboxClientException.class);
+      assertThat(revisionError.statusCode()).isEqualTo(409);
+      assertThat(revisionError.code()).isEqualTo("ITEM_REVISION_CONFLICT");
+      assertThat(
+              ((Number) revisionError.details().get("expectedRevision")).longValue())
+          .isEqualTo(staleView.revision() + 1);
+      assertThat(
+              ((Number) revisionError.details().get("actualRevision")).longValue())
+          .isEqualTo(staleView.revision());
+      assertThat(revisionError.details()).containsEntry("itemStatus", "available");
+
+      InboxModels.PushResult doneTarget =
+          client.push(
+              "app-a",
+              InboxModels.PushItem.builder("ticket").summary("done target").build());
+      InboxModels.ClaimResult doneClaim =
+          client.claim("app-a", List.of(doneTarget.itemId()), Duration.ofSeconds(60));
+      client.complete(
+          "app-a",
+          List.of(
+              new InboxModels.Completion(
+                  doneClaim.claimed().getFirst().claimToken(), "completed", "done")));
+      InboxClientException doneError =
+          catchThrowableOfType(
+              () -> client.deleteItem("app-a", doneTarget.itemId(), null),
+              InboxClientException.class);
+      assertThat(doneError.statusCode()).isEqualTo(409);
+      assertThat(doneError.code()).isEqualTo("ITEM_STATUS_CONFLICT");
+      assertThat(doneError.details()).containsEntry("itemStatus", "done");
     }
   }
 

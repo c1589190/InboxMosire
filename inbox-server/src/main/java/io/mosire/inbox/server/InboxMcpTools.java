@@ -458,6 +458,17 @@ public final class InboxMcpTools {
     }
   }
 
+  private static String detailedMessage(String message, Map<String, Object> details) {
+    if (details == null || details.isEmpty()) {
+      return message;
+    }
+    try {
+      return message + " details=" + InboxJson.MAPPER.writeValueAsString(details);
+    } catch (Exception ignored) {
+      return message;
+    }
+  }
+
   private static Map<String, Object> pushProperties() {
     Map<String, Object> props = new LinkedHashMap<>();
     props.put("inbox", McpToolSupport.prop("string", "Inbox id; defaults to the server default."));
@@ -501,7 +512,7 @@ public final class InboxMcpTools {
           Object result = executor.execute(context.arguments());
           return ToolResult.ok(InboxJson.MAPPER.writeValueAsString(result));
         } catch (InboxException e) {
-          return ToolResult.error(e.code().name(), e.getMessage());
+          return ToolResult.error(e.code().name(), detailedMessage(e.getMessage(), e.details()));
         } catch (IllegalArgumentException e) {
           return ToolResult.error(
               InboxException.Code.INVALID_ARGUMENT.name(),

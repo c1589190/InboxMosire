@@ -123,6 +123,17 @@ class InboxMcpServerTest {
             .contains("line-one")
             .contains("line-two");
 
+        McpSchema.CallToolResult claimedDelete =
+            client.callTool(call("inbox_delete", Map.of("itemId", itemId)));
+        assertThat(claimedDelete.isError()).isTrue();
+        String claimedDeleteText = wireText(claimedDelete);
+        assertThat(claimedDeleteText)
+            .contains("ITEM_STATUS_CONFLICT")
+            .contains("claimed")
+            .contains("complete")
+            .contains("release")
+            .doesNotContain("line-one");
+
         McpSchema.CallToolResult completed =
             client.callTool(
                 call(

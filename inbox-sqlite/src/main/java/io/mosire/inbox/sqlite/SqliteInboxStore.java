@@ -424,7 +424,10 @@ public final class SqliteInboxStore implements InboxStore {
   public ItemDetail viewItem(String inboxId, String itemId, Set<String> allowedChannels) {
     lock.lock();
     try {
-      ItemRow row = findActiveItemLocked(inboxId, itemId);
+      ItemRow row = findItemLocked(inboxId, itemId);
+      if (row.status() == ItemStatus.DONE) {
+        throw SqliteSupport.notFound("通知已归档: " + itemId);
+      }
       requireAllowedChannel(row.channel(), allowedChannels);
       return row.detail();
     } catch (SQLException e) {
@@ -483,7 +486,7 @@ public final class SqliteInboxStore implements InboxStore {
       Set<String> allowedChannels) {
     return inTransaction(
         () -> {
-          ItemRow row = findActiveItemLocked(inboxId, itemId);
+          ItemRow row = findItemLocked(inboxId, itemId);
           requireAllowedChannel(row.channel(), allowedChannels);
           requireAvailable(row);
           requireExpectedRevision(row, expectedRevision);
@@ -518,7 +521,7 @@ public final class SqliteInboxStore implements InboxStore {
       ItemUpdateFunction updater) {
     return inTransaction(
         () -> {
-          ItemRow row = findActiveItemLocked(inboxId, itemId);
+          ItemRow row = findItemLocked(inboxId, itemId);
           requireAllowedChannel(row.channel(), allowedChannels);
           requireAvailable(row);
           requireExpectedRevision(row, expectedRevision);
@@ -549,14 +552,14 @@ public final class SqliteInboxStore implements InboxStore {
         });
   }
 
-  private ItemRow findActiveItemLocked(String inboxId, String itemId) throws SQLException {
+  private ItemRow findItemLocked(String inboxId, String itemId) throws SQLException {
     try (PreparedStatement ps =
         connection.prepareStatement(
             """
             SELECT id, inbox_id, channel, kind, title, payload, payload_ref, priority,
                    status, attempts, revision, created_at, updated_at
             FROM inbox_item
-            WHERE id = ? AND inbox_id = ? AND status <> 'done'
+            WHERE id = ? AND inbox_id = ?
             """)) {
       ps.setString(1, itemId);
       ps.setString(2, inboxId);
@@ -590,16 +593,34 @@ public final class SqliteInboxStore implements InboxStore {
 
   private static void requireAvailable(ItemRow row) {
     if (row.status() != ItemStatus.AVAILABLE) {
+      Map<String, Object> details = new LinkedHashMap<>();
+      details.put("itemStatus", row.status().wireValue());
+      details.put("allowedActions", allowedActions(row.status()));
       throw new InboxException(
-          InboxException.Code.CONFLICT, "通知已被领取或完成，不能修改/删除");
+          InboxException.Code.ITEM_STATUS_CONFLICT,
+          "item 当前状态不允许该操作: " + row.status().wireValue(),
+          details);
     }
+  }
+
+  private static List<String> allowedActions(ItemStatus status) {
+    return switch (status) {
+      case CLAIMED -> List.of("complete", "release");
+      case DONE -> List.of();
+      case AVAILABLE -> List.of("update", "append", "delete");
+    };
   }
 
   private static void requireExpectedRevision(ItemRow row, Long expectedRevision) {
     if (expectedRevision != null && expectedRevision != row.revision()) {
+      Map<String, Object> details = new LinkedHashMap<>();
+      details.put("expectedRevision", expectedRevision);
+      details.put("actualRevision", row.revision());
+      details.put("itemStatus", row.status().wireValue());
       throw new InboxException(
-          InboxException.Code.CONFLICT,
-          "item revision 不匹配: expected=" + expectedRevision + " actual=" + row.revision());
+          InboxException.Code.ITEM_REVISION_CONFLICT,
+          "item revision 不匹配: expected=" + expectedRevision + " actual=" + row.revision(),
+          details);
     }
   }
 

@@ -342,7 +342,8 @@ public final class InboxClientMcpTools {
         try {
           return ToolResult.ok(JSON.writeValueAsString(executor.execute(context.arguments())));
         } catch (InboxClientException e) {
-          return ToolResult.error(e.code() == null ? "INBOX_CLIENT_ERROR" : e.code(), e.getMessage());
+          String code = e.code() == null ? "INBOX_CLIENT_ERROR" : e.code();
+          return ToolResult.error(code, detailedMessage(e.getMessage(), e.details()));
         } catch (IllegalArgumentException e) {
           return ToolResult.error("INVALID_ARGUMENT", e.getMessage());
         } catch (Exception e) {
@@ -432,6 +433,17 @@ public final class InboxClientMcpTools {
   private static String optionalString(Map<String, Object> args, String key) {
     Object value = args.get(key);
     return value == null ? null : value.toString();
+  }
+
+  private static String detailedMessage(String message, Map<String, Object> details) {
+    if (details == null || details.isEmpty()) {
+      return message;
+    }
+    try {
+      return message + " details=" + JSON.writeValueAsString(details);
+    } catch (Exception ignored) {
+      return message;
+    }
   }
 
   private static Map<String, Object> pushProperties() {
