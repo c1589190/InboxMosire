@@ -1,11 +1,12 @@
 # STATUS
 
-- 日期：2026-10-26
+- 日期：2026-10-27
 - 分支：`main`
 - 版本：`0.1.0-SNAPSHOT`
-- 阶段：通用 summary/content item 已实现；中心 MCP 11 工具、程序自有 MCP 15 工具；等待 DSH 切换 summary 字段
-- 最近功能提交：`b7136ad feat(item): 统一 summary/content 并新增 view/update/append/delete`
-- 最近契约提交：`1be515f docs(api): 定义通用 summary/content item 与 view/update/append/delete`
+- 阶段：通用 item 与 409 冲突错误已实现；DSH wakeMode=view-ack、programMcp 刷新与挂载说明已完成；Bot 侧后续映射待做
+- 最近 Inbox 功能提交：`91228dc feat(errors): 区分 item 状态冲突与 revision 冲突`
+- 最近 Inbox 契约提交：`2c4b1c2 docs(errors): 发布 item 冲突 code/details 契约`
+- 最近 DSH 提交：`6b71f6b feat(adapter): 增加 view-ack 唤醒模式与程序 MCP 诊断修复`
 
 ## 已完成
 
@@ -33,6 +34,11 @@
   - ensure/push/status/list/view/update/append/delete/claim/renew/complete/release
   - credential issue/list/rotate/revoke/whoAmI
   - SSE stream
+- 通用 Item 错误与生命周期：
+  - `ITEM_STATUS_CONFLICT`：claimed/done 不可修改/删除，带 `itemStatus` 与 `allowedActions`；
+  - `ITEM_REVISION_CONFLICT`：expectedRevision 不匹配，带 expected/actual；
+  - `InboxException`、HTTP `ApiError`、`InboxClientException` 均保留安全 details；
+  - `view` 已归档 item 仍是 404，修改/删除 done 返回状态冲突。
 - 通用 Item：
   - `summary`：短摘要，列表和 wake 摘要使用；
   - `content`：不透明完整内容，程序/用户自定义文本、Markdown 或 JSON 字符串；
@@ -42,7 +48,7 @@
   - `inbox_view` 返回 summary + content，不 claim；
   - `inbox_claim` 返回 summary + content；
   - update/append/delete 推进 revision 并写 event；
-  - 仅 `available` item 可修改，claimed 返回 409 `CONFLICT`。
+  - 仅 `available` item 可修改；claimed/done 返回 409 `ITEM_STATUS_CONFLICT`，stale revision 返回 `ITEM_REVISION_CONFLICT`。
 - 中心后端 MCP 11 工具：
   - status/list/view/update/append/delete
   - claim/renew/complete/release
@@ -90,27 +96,36 @@
   - 程序自有 MCP 15 工具注册；
   - legacy `title/payload` HTTP 输入兼容；
   - 原有 claim/complete/SSE/token/occupancy 用例保持通过。
-- 本次未启动 live daemon；验证使用临时 SQLite + 真实进程内 HTTP/MCP daemon。
-- 本次未重跑真实 DSH host/ACP 场景；DSH 下一阶段按新提示词做 summary 字段切换。
+- 本次验证使用临时 SQLite + 真实进程内 HTTP/MCP daemon；另有一个外部手动 daemon 正在 18765/18766 运行。
+- 本次未重跑真实 DSH host/ACP 场景；下一步是配置真实 DSH connector（scope/URL/Bearer）并跑一次 view-ack wake 验收。
 
 ## DSH 对接状态
 
-- `InboxMosire-DSH` 已完成 wake summary，commit `8c2bdaa feat(summary): bounded item summaries in wake messages`；
-- 当前 DSH summary 仍读取 `title`；
-- 后端 `/items` 同时返回 `summary` 和 legacy `title`，所以 DSH 现在不会断；
-- 下一阶段提示词：
-  `docs/upstream/DSH-SUMMARY-CONTENT-PROMPT.md`
-- DSH 必改：
-  - `normalizeItems` 优先 `summary`，缺失 fallback `title`；
-  - wake 摘要 JSON 使用 `summary`；
-  - 不请求/不保存/不输出 content；
-  - 继续不 claim/complete/push；
-  - 不做跨工具自动跳转。
+- `InboxMosire-DSH` 已完成 summary/content 与 WebUI inbox panel，基线 `8015748`；
+- 后端 `/items` 同时返回 `summary` 和 legacy `title`；
+- DSH 已完成本轮修复：
+  - `wakeMode=view-ack` 不出现 `inbox_claim`，claim 模式保持兼容；
+  - `hasBusinessTools` 识别 `inbox_view`（含 MCP 前缀）；
+  - `inbox_adapter_status` 主动刷新 `programMcp`，不必等下一次 wake；
+  - 新增 `docs/PROGRAM-MCP-ATTACH.md`，说明 connector scope/URL/Bearer；
+  - DSH 代码在 `6b71f6b`，已本地提交，待推送。
+- Bot 侧待做：
+  - `InboxClientDigestPort.mapFailure` 区分 `ITEM_STATUS_CONFLICT` / `ITEM_REVISION_CONFLICT`；
+  - `BotThreadAckTool` 不要所有异常都压成 `INBOX_CONFLICT`；
+  - ack 后保留 cursor-only state，避免 digest 从 seq 0 重放；
+  - 状态冲突时不要 `states.clear()` 后立即 push 新 item。
 - 程序 MCP 新增 view/update/append/delete；目标 Agent 通过程序自有 MCP 使用，DSH adapter 不暴露这些工具。
 
-## live 实例（已停止）
+## live 实例
 
-按要求 `inboxd-live.service` 仍停止，18765/18766 不监听。
+`inboxd-live.service` 仍是 inactive；但当前有一个手动启动的 daemon 正在监听 18765/18766：
+
+```text
+PID 33757
+data: /home/cna/InboxMosire/.work/live/data
+```
+
+不要把它和 systemd service 状态混为一谈。
 
 数据、bindings、token secret 保留在本机 `.work/live`，未删除：
 

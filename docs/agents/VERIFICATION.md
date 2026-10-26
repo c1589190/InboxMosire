@@ -52,3 +52,21 @@ scripts/gate.sh full
 - 兼容：旧 `title/payload` 输入继续可用；`/items` 响应同时含 `summary` 与 `title`。
 - 未启动 live daemon；未重跑真实 DSH host/ACP。
 - DSH 当前 summary 基线：`8c2bdaa`；下一阶段提示词见 `docs/upstream/DSH-SUMMARY-CONTENT-PROMPT.md`。
+
+
+## v1.6 验证补充（2026-10-27）
+
+- Inbox：`./mvnw -B -ntp clean install` 通过；31 tests，0 failures/errors/skipped；7 个模块 Checkstyle 0。
+- 新错误契约真实验证：
+  - claimed item 修改/删除返回 HTTP 409 `ITEM_STATUS_CONFLICT`，details 含 `itemStatus=claimed`、`allowedActions=[complete,release]`；
+  - available item stale revision 返回 `ITEM_REVISION_CONFLICT`，details 含 expected/actual/itemStatus；
+  - done item 删除返回 `ITEM_STATUS_CONFLICT`，`itemStatus=done`；
+  - 错误 details 不含 content/token。
+- 中心 MCP `inbox_delete` 对 claimed item 返回 `ITEM_STATUS_CONFLICT`，message 带 details。
+- DSH：`node --test` 120 tests；在 live probe 指向关闭端口时 117 pass、0 fail、3 live real-backend skip。
+- DSH 新测试覆盖：
+  - view-ack wake 文本不含 `inbox_claim`；
+  - wakeMode 持久化/非法值拒绝；
+  - `inbox_view` 的 MCP 前缀识别；
+  - status 主动刷新 `programMcp=available/missing`。
+- 未完成：实际 DSH connector 仍需要按 `docs/PROGRAM-MCP-ATTACH.md` 修改 scope/URL/Bearer；Bot 的 409 映射与 cursor 逻辑不在本次改动范围内。
