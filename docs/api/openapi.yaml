@@ -125,7 +125,8 @@ paths:
       - Producer
       operationId: listItems
       summary: List available item summaries without payload.
-      description: Requires `items:read`. Channel-scoped credentials see only their channels.
+      description: Requires `items:read`. DSH/host adapters may request a small limit (for example 3) to build a bounded wake
+        summary. Payload is never returned here.
       parameters:
       - $ref: '#/components/parameters/Inbox'
       - name: channel

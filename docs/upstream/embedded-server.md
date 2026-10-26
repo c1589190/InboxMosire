@@ -84,6 +84,8 @@ status:read
 events:read
 ```
 
+`issueBinding()` 签发的 DSH wake token 还包含 `items:read`，允许 adapter 在唤醒前读 bounded item 摘要。
+
 程序可以继续：
 
 ```java

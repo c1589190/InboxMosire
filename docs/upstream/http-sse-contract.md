@@ -247,6 +247,8 @@ Authorization: Bearer <inbox:ensure-or-admin-token>
 
 需要 `items:read`。
 
+Adapter 在唤醒前可用该端点取 bounded 摘要（默认建议 `limit=3`）；响应不含 payload。DSH wake token 可包含 `items:read`，但仍不得用于 claim/complete（需 `items:manage`）。
+
 ```http
 GET /v1/inboxes/app-a/items?channel=ticket&limit=50
 ```

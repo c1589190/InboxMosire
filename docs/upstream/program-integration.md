@@ -158,7 +158,7 @@ InboxModels.BindingDescriptor binding = provisioner.issueBinding(
 
 `adapterTokenRef` 指向本地 `0600` secret 文件，不包含 token 原文。程序通过自己的 MCP 工具把这个 descriptor 返回给目标会话；目标会话再把 descriptor 交给 DSH adapter 的 bind 工具。
 
-`issueBinding` 签发的 wake token 包含 `status:read`、`events:read`、`inbox:occupy`，因此 DSH adapter 可以在 bind/unbind 时维护 advisory occupancy。
+`issueBinding` 签发的 wake token 包含 `status:read`、`events:read`、`items:read`、`inbox:occupy`，因此 DSH adapter 可以在 bind/unbind 时维护 advisory occupancy，并在唤醒前读取 bounded item 摘要。
 
 程序也可以直接维护占用：
 
@@ -219,7 +219,7 @@ raw token 只在 issue/rotate 响应中出现一次；MCP 和 metadata 列表不
 
 - Program provisioner token：本机 CLI/管理员带入，长期放 secret store；
 - Program MCP token：由 provisioner 签发，供程序自己的 MCP client 内部使用；
-- Adapter wake token：由 `issueBinding` 签发给 DSH adapter，存 `tokenRef` 指向的文件；
+- Adapter wake token：由 `issueBinding` 签发给 DSH adapter，scope 含 `status:read`、`events:read`、`items:read`、`inbox:occupy`，存 `tokenRef` 指向的文件；
 - 所有 token 可设置 TTL，可 rotate/revoke；
 - rotate 旧 token 立即失效；
 - 失效策略是 401，adapter/程序需重新加载 secret。
@@ -231,7 +231,7 @@ raw token 只在 issue/rotate 响应中出现一次；MCP 和 metadata 列表不
 ```text
 inbox app-a
   ├─ program-a MCP token：items:*
-  └─ adapter wake token：status:read, events:read
+  └─ adapter wake token：status:read, events:read, items:read, inbox:occupy
 ```
 
 DSH host 的不同 session 可以分别绑定不同 inbox：

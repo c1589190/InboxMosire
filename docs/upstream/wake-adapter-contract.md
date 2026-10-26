@@ -1,22 +1,48 @@
 # Wake Adapter 契约
 
-> **v2 多 binding 变更（2026-10-25）**：当前 DSH 对接以
+> **v2 多 binding（2026-10-25）**：当前 DSH 对接以
 > [`DSH-MULTI-BINDING-PROMPT.md`](DSH-MULTI-BINDING-PROMPT.md) 为准。
-> v2 要求一个 DSH host 维护 `sessionRef -> binding` 映射；每个 session 独立
+> 一个 DSH host 维护 `sessionRef -> binding` 映射；每个 session 独立
 > `inboxId / adapterTokenRef / SSE / cursor / revision / wake watermark`。
-> 目标会话使用程序自有 MCP（Mode A），DSH adapter 只读 status + SSE + followup。
-> 下文保留为单 binding 历史契约。
+> 目标会话使用程序自有 MCP（Mode A），adapter 只读 status/items/SSE 并 followup。
 
-## v1 单 binding 历史契约
+## v2 摘要唤醒增补
 
-# Wake Adapter 契约
+Adapter 在一次需要唤醒的决策中必须执行：
 
-> **v2 多 binding 变更（2026-10-25）**：当前 DSH 对接以
-> [`DSH-MULTI-BINDING-PROMPT.md`](DSH-MULTI-BINDING-PROMPT.md) 为准。
-> v2 要求一个 DSH host 维护 `sessionRef -> binding` 映射；每个 session 独立
-> `inboxId / adapterTokenRef / SSE / cursor / revision / wake watermark`。
-> 目标会话使用程序自有 MCP（Mode A），DSH adapter 只读 status + SSE + followup。
-> 下文保留为单 binding 历史契约。
+```text
+adapterTokenRef
+  -> GET /status
+  -> available > 0 ?
+       -> GET /items?limit=N
+       -> 生成 bounded summary
+       -> 一次 followup
+       否则 idle
+```
+
+- wake token 必须含 `status:read`、`items:read`、`events:read`、`inbox:occupy`；
+- 摘要默认最多 3 条，每条只取 `itemId/channel/kind/title`；
+- 标题最多 80 字符，清除换行/控制字符，作为 JSON 字符串嵌入；
+- 不拼接 payload、payloadRef、claim token、API token；
+- 摘要失败时降级为无摘要唤醒；
+- 摘要不是 claim 结果，claim 才返回权威 payload；
+- 同一 revision 仍只允许一次 followup；
+- adapter 不 claim、不 complete、不 push。
+
+摘要示例：
+
+```text
+[INBOX_HOST_EVENT]
+inbox=main revision=42 available=4 channels=[ticket]
+
+摘要（最多 3 条；可能已变化，claim 时以通知板为准）:
+- {"itemId":"itm_...","channel":"ticket","kind":"reply","title":"工单更新"}
+- {"itemId":"itm_...","channel":"tweet-review","kind":"review","title":"待审推文"}
+- 还有 2 条未展示
+
+请直接通过程序 MCP 调用 inbox_claim 选择本回合要处理的 itemId；
+如果摘要不足，再调用 inbox_list。
+```
 
 ## v1 单 binding 历史契约
 

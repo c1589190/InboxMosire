@@ -3,8 +3,8 @@
 - 日期：2026-10-25
 - 分支：`main`
 - 版本：`0.1.0-SNAPSHOT`
-- 阶段：后端多程序接入 v2、embedded server、DSH v2 多 binding 均已完成
-- 最近代码提交：`56df47a feat(embedded): 提供一行启动独立 InboxMosire server 的共享库`
+- 阶段：后端/embedded/DSH v2 已完成；wake 摘要契约已就绪，等待 DSH 实现摘要注入
+- 最近代码提交：`1de1ed8 feat(client): 为 wake token 增加 items:read 摘要读取权限`
 - 最近文档提交：`555a268 docs(upstream): 增加其他项目接入与创建 inbox 提示词`
 
 ## 已完成
@@ -47,6 +47,12 @@
   - `/claims/renew|complete|release`
 - DSH v2 对接提示词：
   - `docs/upstream/DSH-MULTI-BINDING-PROMPT.md`
+- Wake 摘要契约：
+  - `InboxClient.issueBinding()` 签发的 adapter token 增加 `items:read`；
+  - adapter 在 `status.available > 0` 后读取 `GET /items?limit=N`；
+  - 唤醒消息可带 bounded summary（默认 3 条，含 itemId/channel/kind/title）；
+  - 摘要失败必须降级为无摘要唤醒；
+  - payload/claim token/API token 仍不得进入摘要。
 
 ## 最近验证
 
@@ -109,6 +115,13 @@ Secrets:  .work/live/secrets (0600, not committed)
 - Web profile 重启迁移 v1 state 到 v2；
 - Mode A 下目标会话使用程序自有 MCP，不直连中心 MCP；
 - occupancy bind/unbind 清理。
+
+下一步（待 DSH）：
+
+- adapter 用 `items:read` 拉取 top-N 摘要；
+- 在 wake message 中注入 bounded summary；
+- 摘要失败时降级，不阻塞唤醒；
+- 重新签发/重新 bind 旧 wake token，因为旧 token 没有 `items:read`。
 
 其他项目接入提示词：
 `docs/upstream/OTHER-PROJECT-INTEGRATION-PROMPT.md`。

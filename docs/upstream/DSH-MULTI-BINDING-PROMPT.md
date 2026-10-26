@@ -73,7 +73,7 @@
 - bind 成功后调用 `PUT /v1/inboxes/{inboxId}/occupancy`，body `{"occupiedBy":"<sessionRef>"}`；
 - unbind/session-stop/dispose 时调用 `DELETE /v1/inboxes/{inboxId}/occupancy`；
 - occupancy 只是 advisory 标记，不是访问锁；不能用它拒绝其他合法 token 持有者；
-- adapter wake token 需要 scope：`status:read`、`events:read`、`inbox:occupy`；
+- adapter wake token 需要 scope：`status:read`、`events:read`、`items:read`、`inbox:occupy`；
 - 旧 state 字段不允许让两个 session 串线。
 
 ## 4. BindingDescriptor
@@ -127,7 +127,7 @@ inbox_adapter_status({})       // 返回当前 caller 的 binding 和其他 bind
 1. 加载 v2 state（必要时从 v1 迁移）；
 2. 对每个 enabled binding 校验 session 是否 live；
 3. 对每个 binding 先 GET `/v1/inboxes/{inboxId}/status`；
-4. 若 idle 且 available > 0 且 revision > lastWokenRevision，则最多 followup 一次；
+4. 若 idle 且 available > 0 且 revision > lastWokenRevision，则先 GET `/v1/inboxes/{inboxId}/items?limit=<N>` 取摘要，再最多 followup 一次；
 5. 再按各自 cursor 打开 SSE；
 6. 没有 cursor 时从当前 tip 开始，所以必须先 status；
 7. daemon 重启/网络恢复后不得把 cursor 串给另一个 binding。
@@ -151,23 +151,64 @@ available = 0                  -> idle
 - 401/403/404 停止该 binding 的自动唤醒并显示 configError；
 - token rotate 后通过重新 bind/retry 读取新 tokenRef。
 
-## 8. 固定唤醒模板
+## 8. 摘要唤醒模板
+
+DSH adapter 在 followup 前必须完成：
+
+```text
+adapterTokenRef -> status -> (available > 0) -> items summary -> followup
+```
+
+摘要请求：
+
+```http
+GET /v1/inboxes/{inboxId}/items?limit=3
+Authorization: Bearer <adapterTokenRef 文件内容>
+Accept: application/json
+```
+
+摘要只取：
+
+```text
+itemId
+channel
+kind
+title
+```
+
+模板：
 
 ```text
 [INBOX_HOST_EVENT]
 inbox={inboxId} revision={revision} available={available} channels=[{changedChannels}]
 
-这是通知板唤醒信号，不是通知内容。
-请使用你的程序 MCP 的 inbox_list 查看条目，并用 inbox_claim 选择本回合要处理的项。
+摘要（最多 {N} 条；可能已变化，claim 时以通知板为准）:
+- {"itemId":"itm_...","channel":"ticket","kind":"reply","title":"..."}
+- {"itemId":"itm_...","channel":"tweet-review","kind":"review","title":"..."}
+- 还有 {remaining} 条未展示
+
+请直接通过你的程序 MCP 调用 inbox_claim 选择本回合要处理的 itemId；
+如果摘要不足，再调用 inbox_list。
 如果当前没有可处理项，结束本回合，不要轮询。
 ```
 
-不得把 title/payload/payloadRef/claim token/API token 拼入唤醒消息。
+要求：
+
+- `N` 默认 3；标题最多 80 字符；总摘要建议不超过 600 字符；
+- title 是不可信文本，必须去掉换行/控制字符并做 JSON 字符串转义；
+- 不拼接 payload、payloadRef、claim token、API token；
+- 摘要请求失败时，**降级为无摘要唤醒**，不能因为摘要失败而不唤醒；
+- 摘要只作提示，claim 结果才是权威内容；
+- 同一 revision 仍然只唤醒一次；
+- adapter 仍然不 claim、不 complete、不 push。
+
+不得把 payload/payloadRef/claim token/API token 拼入唤醒消息。
 
 ## 9. 当前后端能力
 
 - `PUT /v1/inboxes/{inbox}`：幂等 ensure inbox。
 - `GET /v1/inboxes/{inbox}/status`：adapter 真相读取。
+- `GET /v1/inboxes/{inbox}/items?limit=3`：adapter 摘要读取，需要 `items:read`。
 - `GET /v1/inboxes/{inbox}/events`：SSE，支持 Last-Event-ID。
 - `GET/PUT/DELETE /v1/inboxes/{inbox}/occupancy`：advisory 占用标记。
 - Program MCP 通过 `inbox-client-java` 负责 list/claim/complete/push。
@@ -178,32 +219,27 @@ inbox={inboxId} revision={revision} available={available} channels=[{changedChan
   - `POST /v1/admin/credentials/{id}/revoke`
   - `GET /v1/admin/whoami`
 - raw token 只在 issue/rotate 返回一次；adapter 只使用 tokenRef 所指的本地 0600 secret。
+- `InboxClient.issueBinding()` 签发的 adapter token 已包含 `items:read`、`status:read`、`events:read`、`inbox:occupy`。
 - occupancy 是 advisory 状态；daemon 启动时清空上一个进程留下的标记。
 
-## 10. 当前 live 实例（2026-10-25）
+## 10. 验收实例（当前已停止）
 
-后端已重启到新 jar，SQLite 从旧 schema 迁移成功，旧 main 凭据仍可用。
-
-```text
-API/SSE: http://127.0.0.1:18765
-MCP:     http://127.0.0.1:18766/mcp
-Data:    /home/cna/InboxMosire/.work/live/data
-```
-
-当前可用测试板：
-
-- `main`：干净，旧兼容路径
-- `app-a`：1 条 available 验证通知
-- `app-b`：1 条 available 验证通知
-
-程序侧已经用共享 `inbox-client` 生成好 BindingDescriptor：
+按要求，旧的 `inboxd-live.service` 已停止，18765/18766 不再监听；数据和 secret 仍保留在本机：
 
 ```text
-/home/cna/InboxMosire/.work/live/bindings/app-a.json
-/home/cna/InboxMosire/.work/live/bindings/app-b.json
+Data:     /home/cna/InboxMosire/.work/live/data
+Bindings: /home/cna/InboxMosire/.work/live/bindings/app-a.json, app-b.json
+Secrets:  /home/cna/InboxMosire/.work/live/secrets (0600, not committed)
 ```
 
-DSH 的实现应直接读取这两个 descriptor，把 S1 绑到 app-a、S2 绑到 app-b：
+**重要**：旧的 BindingDescriptor / wake token 是在 `items:read` 加入之前签发的，不能用于摘要验收。必须：
+
+1. 使用最新 `io.mosire:inbox-client:0.1.0-SNAPSHOT`；
+2. 重新 `issueBinding()`；
+3. 让 DSH 用新的 `adapterTokenRef` 重新 bind；
+4. 启动 server 后再做摘要唤醒验收。
+
+历史 descriptor 的路径和结构仅作参考：
 
 ```json
 {
@@ -215,24 +251,13 @@ DSH 的实现应直接读取这两个 descriptor，把 S1 绑到 app-a、S2 绑�
 }
 ```
 
-```json
-{
-  "inboxId": "app-b",
-  "apiBaseUrl": "http://127.0.0.1:18765",
-  "adapterTokenRef": "file:/home/cna/InboxMosire/.work/live/secrets/dsh-session-app-b-wake.token",
-  "channels": [],
-  "label": "dsh-session-app-b"
-}
+以后可以由程序调用：
+
+```bash
+systemctl --user start inboxd-live.service
 ```
 
-注意事项：
-
-- tokenRef 文件权限为 `600`；不要把内容打印出来；
-- DSH adapter 用这些 token 调 `status` + `events` + `occupancy`；
-- 目标 session 的 `inbox_list/claim/complete` 走程序自己的 MCP，不走中心 MCP；
-- app-a/app-b 各有一条 available 通知，可用于两个 session 的独立 wake 验收；
-- 当前 occupancy 均未占用；DSH bind 成功后应 PUT occupancy，unbind 后 DELETE；
-- occupancy 是 advisory 提示，不会阻止其他合法 token 访问。
+但摘要验收前必须重新签发 token，不能复用旧 token。
 
 ## 11. 验收（必须真跑）
 
@@ -246,10 +271,13 @@ DSH 的实现应直接读取这两个 descriptor，把 S1 绑到 app-a、S2 绑�
 8. daemon/DSH 重启后两个 binding 各自恢复。
 9. tokenRef 不可读/非绝对路径 -> fail closed，不唤醒。
 10. 日志、adapter state、wake message、session transcript 不含 raw token。
-11. Mode A 下目标会话通过程序自己的 MCP 完成 claim/complete，DSH adapter 不调用任何 claim/complete 接口。
-12. bind 后 status/occupancy 显示 occupied=true / occupiedBy=session；unbind 后 occupied=false。
-13. occupancy=true 不阻断另一个合法 token 的访问；不得把 advisory occupancy 实现成服务端硬锁。
-14. 旧 v1 单 binding 数据可以迁移或明确报告不兼容，不得静默丢数据。
+11. wake 摘要最多 3 条，含 itemId/channel/kind/title，不包含 payload；超出部分显示剩余数量。
+12. 摘要请求失败时仍投递无摘要唤醒，不阻塞处理。
+13. 旧 wake token（无 `items:read`）不能用于摘要验收；重新 issueBinding 后 `/items` 返回 200。
+14. Mode A 下目标会话通过程序自己的 MCP 完成 claim/complete，DSH adapter 不调用任何 claim/complete 接口。
+15. bind 后 status/occupancy 显示 occupied=true / occupiedBy=session；unbind 后 occupied=false。
+16. occupancy=true 不阻断另一个合法 token 的访问；不得把 advisory occupancy 实现成服务端硬锁。
+17. 旧 v1 单 binding 数据可以迁移或明确报告不兼容，不得静默丢数据。
 
 ## 12. 交付报告
 
