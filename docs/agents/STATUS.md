@@ -1,11 +1,11 @@
 # STATUS
 
-- 日期：2026-10-25
+- 日期：2026-10-26
 - 分支：`main`
 - 版本：`0.1.0-SNAPSHOT`
-- 阶段：后端/embedded/DSH v2 已完成；wake 摘要契约已就绪，等待 DSH 实现摘要注入
-- 最近代码提交：`1de1ed8 feat(client): 为 wake token 增加 items:read 摘要读取权限`
-- 最近文档提交：`555a268 docs(upstream): 增加其他项目接入与创建 inbox 提示词`
+- 阶段：通用 summary/content item 已实现；中心 MCP 11 工具、程序自有 MCP 15 工具；等待 DSH 切换 summary 字段
+- 最近功能提交：`b7136ad feat(item): 统一 summary/content 并新增 view/update/append/delete`
+- 最近契约提交：`1be515f docs(api): 定义通用 summary/content item 与 view/update/append/delete`
 
 ## 已完成
 
@@ -30,71 +30,89 @@
   - `InboxClient`
   - `TokenStore`
   - `BindingDescriptor`
-  - ensure/push/status/list/claim/renew/complete/release
+  - ensure/push/status/list/view/update/append/delete/claim/renew/complete/release
   - credential issue/list/rotate/revoke/whoAmI
   - SSE stream
-- 程序自有 MCP `inbox-mcp-tools-client`：
-  - 11 个工具，包含 occupancy 三件套和 `inbox_credential_info`（仅 metadata）
-  - 不返回 raw token
+- 通用 Item：
+  - `summary`：短摘要，列表和 wake 摘要使用；
+  - `content`：不透明完整内容，程序/用户自定义文本、Markdown 或 JSON 字符串；
+  - `contentRef` 可选；
+  - `title/payload/payloadRef` 保留兼容；
+  - `inbox_list` 只返回 summary；
+  - `inbox_view` 返回 summary + content，不 claim；
+  - `inbox_claim` 返回 summary + content；
+  - update/append/delete 推进 revision 并写 event；
+  - 仅 `available` item 可修改，claimed 返回 409 `CONFLICT`。
+- 中心后端 MCP 11 工具：
+  - status/list/view/update/append/delete
+  - claim/renew/complete/release
+  - push
+- 程序自有 MCP 15 工具：
+  - 中心 11 个
+  - occupancy 三件套
+  - `inbox_credential_info`（仅 metadata）
+- HTTP：
+  - `GET /v1/inboxes/{inbox}/items/{itemId}`
+  - `PATCH /v1/inboxes/{inbox}/items/{itemId}`
+  - `POST /v1/inboxes/{inbox}/items/{itemId}/append`
+  - `DELETE /v1/inboxes/{inbox}/items/{itemId}`
+  - 新增 `items:manage` 保护的修改面；
+  - `items:read` 可 view，不返回 content 到列表/SSE/wake。
 - Advisory inbox occupancy：
   - `GET/PUT/DELETE /v1/inboxes/{inbox}/occupancy`
   - scope `inbox:occupy`
   - status 返回 `occupied/occupiedBy/occupiedAt`
   - 占用不阻塞其他合法 token；daemon 启动清空旧占用
-- 服务端 HTTP action endpoints：
-  - `GET /items`
-  - `POST /claims`
-  - `/claims/renew|complete|release`
-- DSH v2 对接提示词：
-  - `docs/upstream/DSH-MULTI-BINDING-PROMPT.md`
-- Wake 摘要契约：
-  - `InboxClient.issueBinding()` 签发的 adapter token 增加 `items:read`；
-  - adapter 在 `status.available > 0` 后读取 `GET /items?limit=N`；
-  - 唤醒消息可带 bounded summary（默认 3 条，含 itemId/channel/kind/title）；
-  - 摘要失败必须降级为无摘要唤醒；
-  - payload/claim token/API token 仍不得进入摘要。
+- 文档：
+  - `docs/upstream/http-sse-contract.md`
+  - `docs/upstream/mcp-tools.md`
+  - `docs/upstream/DSH-SUMMARY-CONTENT-PROMPT.md`
+  - `docs/upstream/program-integration.md`
+  - `docs/api/openapi.yaml`
+  - `设计-服务端架构.md` v1.3 增补
 
 ## 最近验证
 
 ```bash
-./mvnw -B -ntp clean verify
+./mvnw -B -ntp clean install
 ```
 
 结果：
 
 - `BUILD SUCCESS`
-- Tests run: **30**，Failures 0, Errors 0, Skipped 0
-- Checkstyle：所有模块 0 violations
-- Maven install 成功，共享库已安装到 `~/.m2`
-- 真实 live 验证：
-  - 旧 SQLite schema 自动迁移，旧 token 仍可认证；
-  - `inbox-client` 真程序创建 `app-a`/`app-b`；
-  - 生成 program MCP token、adapter wake token、`BindingDescriptor`；
-  - app-a/app-b 各有 1 条 available 验证通知；
-  - wake token 访问 items 返回 403；
-  - SSE 无 payload 秘密；
-  - 日志/evidence/binding/raw token 泄漏扫描为 0；
-- 共享库已安装到本地 Maven 仓库：
-  - `io.mosire:inbox-client:0.1.0-SNAPSHOT`
-  - `io.mosire:inbox-mcp-tools-client:0.1.0-SNAPSHOT`
-  - `io.mosire:inbox-embedded:0.1.0-SNAPSHOT`
-- `EmbeddedInboxServer.start("app-a")` 一行启动：
-  - 独立临时 SQLite；
-  - 随机回环 API/MCP 端口；
-  - 自动创建 inbox；
-  - 返回 apiUrl/mcpUrl/provisioner token/client；
-  - close 停止 server 并清理临时目录。
-- occupancy live 验证：
-  - program token 占用 app-a 后 status 显示 occupied；
-  - 另一个合法 status token 仍返回 200（advisory，不阻断）；
-  - wake token 可读取并清除占用；
-  - 清理后 app-a/app-b 仍各有 1 条 available item。
+- Tests run: **31**，Failures 0, Errors 0, Skipped 0
+- Checkstyle：7 个模块全部 0 violations
+- `inbox-client`、`inbox-mcp-tools-client`、`inbox-embedded` 已安装到 `~/.m2`
+- 测试覆盖：
+  - Client view/update/append/delete；
+  - claimed item 修改返回 409；
+  - 中心 MCP view/update/append/delete；
+  - 程序自有 MCP 15 工具注册；
+  - legacy `title/payload` HTTP 输入兼容；
+  - 原有 claim/complete/SSE/token/occupancy 用例保持通过。
+- 本次未启动 live daemon；验证使用临时 SQLite + 真实进程内 HTTP/MCP daemon。
+- 本次未重跑真实 DSH host/ACP 场景；DSH 下一阶段按新提示词做 summary 字段切换。
+
+## DSH 对接状态
+
+- `InboxMosire-DSH` 已完成 wake summary，commit `8c2bdaa feat(summary): bounded item summaries in wake messages`；
+- 当前 DSH summary 仍读取 `title`；
+- 后端 `/items` 同时返回 `summary` 和 legacy `title`，所以 DSH 现在不会断；
+- 下一阶段提示词：
+  `docs/upstream/DSH-SUMMARY-CONTENT-PROMPT.md`
+- DSH 必改：
+  - `normalizeItems` 优先 `summary`，缺失 fallback `title`；
+  - wake 摘要 JSON 使用 `summary`；
+  - 不请求/不保存/不输出 content；
+  - 继续不 claim/complete/push；
+  - 不做跨工具自动跳转。
+- 程序 MCP 新增 view/update/append/delete；目标 Agent 通过程序自有 MCP 使用，DSH adapter 不暴露这些工具。
 
 ## live 实例（已停止）
 
-按要求已停止 `inboxd-live.service`，18765/18766 均不再监听。
+按要求 `inboxd-live.service` 仍停止，18765/18766 不监听。
 
-数据、bindings、token secret 仍保留在本机 `.work/live`，未删除：
+数据、bindings、token secret 保留在本机 `.work/live`，未删除：
 
 ```text
 Data:     .work/live/data
@@ -102,33 +120,13 @@ Bindings: .work/live/bindings/app-a.json, app-b.json
 Secrets:  .work/live/secrets (0600, not committed)
 ```
 
-## DSH 对接状态
-
-用户确认隔壁 v2 验收成功。`InboxMosire-DSH` 已到 commit
-`0391ea5 docs(acceptance): record the post-restart v2 web-profile loop`，远程 `origin/main` 同步。
-
-已验收：
-
-- 单 host 多 session binding；
-- S1→app-a、S2→app-b；
-- 每 binding 独立 SSE/cursor/revision/wake；
-- Web profile 重启迁移 v1 state 到 v2；
-- Mode A 下目标会话使用程序自有 MCP，不直连中心 MCP；
-- occupancy bind/unbind 清理。
-
-下一步（待 DSH）：
-
-- adapter 用 `items:read` 拉取 top-N 摘要；
-- 在 wake message 中注入 bounded summary；
-- 摘要失败时降级，不阻塞唤醒；
-- 重新签发/重新 bind 旧 wake token，因为旧 token 没有 `items:read`。
-
-其他项目接入提示词：
-`docs/upstream/OTHER-PROJECT-INTEGRATION-PROMPT.md`。
-
 ## 已知限制
 
-- 事件 outbox 暂无 retention/清理策略。
-- 中心 MCP 仍是回环无鉴权；Mode A 通过程序自有 MCP 做业务租户边界，部署时必须避免把中心 MCP 暴露给目标会话。
-- raw token 服务端重看未实现；Program/Adapter 在本机 secret store 保存，服务端只提供 metadata/fingerprint。需要时用 rotate。
-- 无 Web UI、无远程公网支持。
+- update/append/delete 只允许 `available`；
+- claimed item 不做原地 contentRevision/stale-complete；
+- 删除是归档，不是物理删除；
+- 事件 outbox 暂无 retention/清理策略；
+- 中心 MCP 仍是回环无鉴权；Mode A 通过程序自有 MCP 做业务租户边界；
+- raw token 服务端重看未实现，需要时 rotate；
+- 无 Web UI、无远程公网支持；
+- 不做跨宿主自动工具调用或 content 链接解析。

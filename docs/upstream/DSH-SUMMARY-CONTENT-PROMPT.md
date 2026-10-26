@@ -1,7 +1,7 @@
 # 给 DSH 的下一阶段对接提示词：Summary / Content 通用 Item
 
 你已经在 `InboxMosire-DSH` 完成 wake summary（commit `8c2bdaa`）。
-InboxMosire 后端现在把 notification item 统一成：
+InboxMosire 后端（功能提交 `b7136ad`）现在把 notification item 统一成：
 
 ```text
 summary : 短摘要，列表和 wake 摘要使用
