@@ -231,7 +231,7 @@ public final class InboxClient {
             inboxId,
             new InboxModels.CredentialIssueRequest(
                 label,
-                Set.of("status:read", "events:read", "inbox:occupy"),
+                Set.of("status:read", "events:read", "items:read", "inbox:occupy"),
                 channels == null ? Set.of() : channels,
                 seconds));
     TokenStore.writeAtomic(tokenFile, issued.token());

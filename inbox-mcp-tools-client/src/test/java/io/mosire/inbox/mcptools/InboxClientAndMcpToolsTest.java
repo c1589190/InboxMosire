@@ -1,6 +1,7 @@
 package io.mosire.inbox.mcptools;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -79,6 +80,26 @@ class InboxClientAndMcpToolsTest {
       InboxClient adapterClient =
           InboxClient.forTokenFile(base, tokenFile);
       assertThat(adapterClient.status("app-a", Set.of()).inbox()).isEqualTo("app-a");
+      assertThat(adapterClient.whoAmI().scopes()).contains("items:read");
+      assertThat(adapterClient.list("app-a", Set.of(), 3).count()).isZero();
+
+      String noItemsToken =
+          daemon
+              .database()
+              .credentials()
+              .issue(
+                  "no-items-read",
+                  Set.of("status:read", "events:read", "inbox:occupy"),
+                  "app-a",
+                  Set.of(),
+                  null,
+                  "test")
+              .token();
+      assertThatThrownBy(
+              () -> client(daemon, base, noItemsToken).list("app-a", Set.of(), 3))
+          .isInstanceOf(InboxClientException.class)
+          .extracting(error -> ((InboxClientException) error).statusCode())
+          .isEqualTo(403);
 
       InboxModels.Occupancy occupied = bootstrap.occupy("app-a", "program-a-session");
       assertThat(occupied.occupied()).isTrue();
