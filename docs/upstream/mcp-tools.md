@@ -396,3 +396,20 @@ MCP 工具结果仍用 code + message；message 会附安全 details。程序自
 - claimed: `itemStatus=claimed`, `allowedActions=[complete,release]`
 - done: `itemStatus=done`, `allowedActions=[]`
 - stale available: `expectedRevision`, `actualRevision`, `itemStatus=available`
+
+## v1.7 restSeconds（DSH adapter hint）
+
+`inbox_complete` 和 `inbox_delete` 的 MCP schema 接受可选：
+
+```json
+{"restSeconds": 60}
+```
+
+Inbox core 不解释这个字段，也不改变 item 状态；它只是让拥有该目标 session 的
+adapter 在成功完成后设置 session 级休息。`0` 表示清除休息，最大 `86400` 秒。
+
+- 休息是 adapter binding 状态，不是 Inbox 板级静音；
+- 休息期间 item 仍保持原状态；
+- DSH adapter 在休息期间不拉 status/summary，也不 followup；
+- 到期后按最新 revision 最多补一次 wake；
+- Bot 的 `bot_thread_ack` 需要单独增加同名可选参数，才能让 Bot 流程携带休息。

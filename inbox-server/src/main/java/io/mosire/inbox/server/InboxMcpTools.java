@@ -211,7 +211,11 @@ public final class InboxMcpTools {
             Map.of(
                 "inbox", McpToolSupport.prop("string", "Inbox id; defaults to the server default."),
                 "itemId", McpToolSupport.prop("string", "Notification id."),
-                "expectedRevision", McpToolSupport.prop("integer", "Optional optimistic revision guard.")),
+                "expectedRevision", McpToolSupport.prop("integer", "Optional optimistic revision guard."),
+                "restSeconds",
+                    McpToolSupport.prop(
+                        "integer",
+                        "Optional DSH-local wake rest after a successful archive; 0 clears rest.")),
             List.of("itemId"),
             false),
         args -> mutationResult(service.deleteItem(
@@ -278,6 +282,10 @@ public final class InboxMcpTools {
         McpToolSupport.schema(
             Map.of(
                 "inbox", McpToolSupport.prop("string", "Inbox id; defaults to the server default."),
+                "restSeconds",
+                    McpToolSupport.prop(
+                        "integer",
+                        "Optional DSH-local wake rest after a successful completion; 0 clears rest."),
                 "completions",
                     Map.of(
                         "type", "array",

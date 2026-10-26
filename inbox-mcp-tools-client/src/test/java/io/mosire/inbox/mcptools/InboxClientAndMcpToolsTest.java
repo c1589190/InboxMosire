@@ -194,6 +194,7 @@ class InboxClientAndMcpToolsTest {
                 new McpSchema.CallToolRequest(
                     "inbox_complete",
                     Map.of(
+                        "restSeconds", 30,
                         "completions",
                         List.of(Map.of("claimToken", claimToken, "outcome", "completed")))));
         assertThat(JSON.readTree(wireText(completed)).get("available").asInt()).isZero();

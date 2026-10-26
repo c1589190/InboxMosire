@@ -164,7 +164,11 @@ public final class InboxClientMcpTools {
             Map.of(
                 "inbox", prop("string", "Inbox id; defaults to the client default."),
                 "itemId", prop("string", "Notification id."),
-                "expectedRevision", prop("integer", "Optional optimistic revision guard.")),
+                "expectedRevision", prop("integer", "Optional optimistic revision guard."),
+                "restSeconds",
+                    prop(
+                        "integer",
+                        "Optional DSH-local wake rest after a successful archive; 0 clears rest.")),
             List.of("itemId")),
         args -> client.deleteItem(
             inbox(args),
@@ -209,6 +213,10 @@ public final class InboxClientMcpTools {
         schema(
             Map.of(
                 "inbox", prop("string", "Inbox id; defaults to the client default."),
+                "restSeconds",
+                    prop(
+                        "integer",
+                        "Optional DSH-local wake rest after a successful completion; 0 clears rest."),
                 "completions", completionArray()),
             List.of("completions")),
         args -> {

@@ -139,6 +139,7 @@ class InboxMcpServerTest {
                 call(
                     "inbox_complete",
                     Map.of(
+                        "restSeconds", 30,
                         "completions",
                         List.of(
                             Map.of(
@@ -159,7 +160,7 @@ class InboxMcpServerTest {
                     Map.of("channel", "ticket", "summary", "delete me", "content", "x")));
         String secondId = json(secondPush).get("itemId").asText();
         McpSchema.CallToolResult deleted =
-            client.callTool(call("inbox_delete", Map.of("itemId", secondId)));
+            client.callTool(call("inbox_delete", Map.of("itemId", secondId, "restSeconds", 30)));
         assertThat(deleted.isError()).as(wireText(deleted)).isFalse();
         assertThat(json(deleted).get("deleted").asBoolean()).isTrue();
         assertThat(json(client.callTool(call("inbox_list", Map.of()))).get("count").asInt())

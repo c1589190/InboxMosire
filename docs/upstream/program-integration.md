@@ -340,3 +340,9 @@ catch (InboxClientException e) {
 - `ITEM_STATUS_CONFLICT`：item 已 claimed 或 done，不要重试同一删除；
 - `ITEM_REVISION_CONFLICT`：重新 view 取得当前 revision 后再处理；
 - 程序包装层不要把所有 409 都统一成同一个 `INBOX_CONFLICT`。
+
+## v1.7 休息提示
+
+程序自己的完成工具（例如 `bot_thread_ack`）如需支持休息，增加可选
+`restSeconds` 参数并把成功结果正常返回；DSH adapter 会观察成功结果并设置当前
+binding 的 `restUntil`。Inbox core 不保存或执行休息状态。
