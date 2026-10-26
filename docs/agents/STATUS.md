@@ -4,9 +4,9 @@
 - 分支：`main`
 - 版本：`0.1.0-SNAPSHOT`
 - 阶段：通用 item、409 冲突错误、DSH view-ack 与 session 级休息已实现；Bot 侧后续映射/参数待做
-- 最近 Inbox 功能提交：`08470af feat(mcp): 完成/归档工具接受可选 restSeconds 提示`
+- 最近 Inbox 功能提交：`489e1d3 feat(mcp): 增加标准 inbox_rest 休息工具`
 - 最近 Inbox 契约提交：`2c4b1c2 docs(errors): 发布 item 冲突 code/details 契约`
-- 最近 DSH 提交：`699e296 feat(rest): 完成工具可设置 session 级 inbox 休息`
+- 最近 DSH 提交：`113a838 feat(rest): 以标准 inbox_rest 工具设置休息`
 
 ## 已完成
 
@@ -35,13 +35,15 @@
   - credential issue/list/rotate/revoke/whoAmI
   - SSE stream
 - Session 级休息：
-  - `inbox_complete` / `inbox_delete` MCP schema 接受可选 `restSeconds`；
+  - 新增标准 MCP 工具 `inbox_rest({restSeconds})`；
+  - `inbox_complete` / `inbox_delete` 也接受可选 `restSeconds`；
   - DSH 观察成功完成工具结果，设置当前 binding 的 `restUntil`；
   - 休息期间不拉 status/summary、不 followup；
   - 到期后最多补一次最新 revision 的唤醒；
   - `restSeconds=0` 清除；最大 86400 秒；
   - 休息只作用于当前 binding，不静音整个 Inbox；
-  - 中心/程序 MCP 工具 schema 已支持，Bot 的 `bot_thread_ack` 仍需单独加参数。
+  - 中心/程序 MCP 都暴露 `inbox_rest`；Bot 的 `InboxClientMcpTools` 更新并重建后自动获得，无需改 Bot ack 工具。
+  - 推荐流程：`inbox_rest({restSeconds:60})`，不依赖 bot_thread_ack 的 schema。
 - 通用 Item 错误与生命周期：
   - `ITEM_STATUS_CONFLICT`：claimed/done 不可修改/删除，带 `itemStatus` 与 `allowedActions`；
   - `ITEM_REVISION_CONFLICT`：expectedRevision 不匹配，带 expected/actual；
@@ -57,12 +59,12 @@
   - `inbox_claim` 返回 summary + content；
   - update/append/delete 推进 revision 并写 event；
   - 仅 `available` item 可修改；claimed/done 返回 409 `ITEM_STATUS_CONFLICT`，stale revision 返回 `ITEM_REVISION_CONFLICT`。
-- 中心后端 MCP 11 工具：
-  - status/list/view/update/append/delete
+- 中心后端 MCP 12 工具：
+  - status/rest/list/view/update/append/delete
   - claim/renew/complete/release
   - push
-- 程序自有 MCP 15 工具：
-  - 中心 11 个
+- 程序自有 MCP 16 工具：
+  - 中心 12 个
   - occupancy 三件套
   - `inbox_credential_info`（仅 metadata）
 - HTTP：
@@ -118,7 +120,7 @@
   - 新增 `docs/PROGRAM-MCP-ATTACH.md`，说明 connector scope/URL/Bearer；
   - DSH 代码在 `6b71f6b`，已提交并推送。
 - Bot 侧待做：
-  - `bot_thread_ack` schema 增加可选 `restSeconds`（DSH 只观察结果，不改变 Bot ack 语义）；
+  - 更新 `inbox-mcp-tools-client` 依赖并重建，获得 16 工具，其中包含 `inbox_rest`；
   - `InboxClientDigestPort.mapFailure` 区分 `ITEM_STATUS_CONFLICT` / `ITEM_REVISION_CONFLICT`；
   - `BotThreadAckTool` 不要所有异常都压成 `INBOX_CONFLICT`；
   - ack 后保留 cursor-only state，避免 digest 从 seq 0 重放；
