@@ -425,7 +425,7 @@ adapter 在成功完成后设置 session 级休息。`0` 表示清除休息，�
 - 休息期间 item 仍保持原状态；
 - DSH adapter 在休息期间不拉 status/summary，也不 followup；
 - 到期后按最新 revision 最多补一次 wake；
-- Bot 的 `bot_thread_ack` 需要单独增加同名可选参数，才能让 Bot 流程携带休息。
+- 推荐 Bot 流程直接调用 `inbox_rest`；如果希望 `bot_thread_ack` 完成即休息，才需要在 Bot 工具 schema 上增加同名可选参数。
 
 ### `inbox_rest`
 

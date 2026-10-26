@@ -72,10 +72,11 @@ scripts/gate.sh full
 - 未完成：实际 DSH connector 仍需要按 `docs/PROGRAM-MCP-ATTACH.md` 修改 scope/URL/Bearer；Bot 的 409 映射与 cursor 逻辑不在本次改动范围内。
 
 
+
 ## v1.7 验证补充（2026-10-27）
 
 - Inbox：`./mvnw -B -ntp clean install` 通过；31 tests，0 failures/errors/skipped；7 个模块 Checkstyle 0。
-- Inbox MCP schema 已接受 `inbox_complete` / `inbox_delete` 的可选 `restSeconds`；该字段不改变 core item 状态。
+- 完成/归档 MCP 工具接受可选 `restSeconds`；该字段不改变 core item 状态。
 - DSH：`INBOX_API_URL=http://127.0.0.1:9 node --test` 运行 124 tests，121 pass、0 fail、3 live real-backend skip。
 - DSH rest 测试：
   - 成功 `tools/result` 携带 `restSeconds=60` 设置当前 binding rest；
@@ -84,23 +85,12 @@ scripts/gate.sh full
   - 1 秒休息到期后最多一次唤醒；
   - 失败工具/非完成工具不设置 rest；
   - `restUntil` 持久化并在 status 中显示。
-- Bot 的 `bot_thread_ack` 仍需增加同名可选参数，尚未修改 Bot 仓库。
-
 
 ## v1.8 验证补充（2026-10-27）
 
 - 中心 MCP 新增 `inbox_rest`，工具总数 12；程序自有 MCP 工具总数 16。
 - `inbox_rest({restSeconds:30})` 返回 `inbox/restSeconds/scope=adapter-session`，不修改 item。
-- DSH 观察 `inbox_rest` 成功结果，设置当前 binding `restUntil`；无需 Bot 自定义 ack 工具改 schema。
-- Inbox 仍保持 31 tests，0 failures/errors/skipped；7 个模块 Checkstyle 0。
-- DSH 仍为 124 tests；live probe 关闭时 121 pass、0 fail、3 skip。
-
-
-## v1.8 验证补充（2026-10-27）
-
-- 中心 MCP 12 工具，程序自有 MCP 16 工具；新增标准 `inbox_rest`。
-- `inbox_rest({restSeconds:30})` 返回 `scope=adapter-session`，不修改任何 item。
-- DSH 观察 `inbox_rest` 成功结果并设置当前 binding `restUntil`；已验证调用者 binding rest、休息期间无 followup、`0` 清除、到期一次唤醒。
-- Inbox：`./mvnw -B -ntp clean install` 通过；31 tests，0 failures/errors/skipped；7 个模块 Checkstyle 0。
-- DSH：`INBOX_API_URL=http://127.0.0.1:9 node --test` 运行 124 tests，121 pass、0 fail、3 live real-backend skip。
+- DSH 观察 `inbox_rest` 成功结果，设置当前 binding `restUntil`；已验证调用者 binding rest、休息期间无 followup、`0` 清除、到期一次唤醒。
 - Bot 不需要改 `bot_thread_ack` schema 才能使用休息；只需更新 `inbox-mcp-tools-client` 依赖/重建并让 Agent 调 `inbox_rest`。
+- Inbox：31 tests，0 failures/errors/skipped；7 个模块 Checkstyle 0。
+- DSH：124 tests，121 pass、0 fail、3 live real-backend skip。
