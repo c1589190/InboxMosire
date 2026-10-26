@@ -36,6 +36,7 @@ public final class InboxClientMcpTools {
   public List<AgentTool> all() {
     return List.of(
         statusTool(),
+        restTool(),
         listTool(),
         viewTool(),
         updateTool(),
@@ -64,6 +65,31 @@ public final class InboxClientMcpTools {
         args -> {
           String inbox = inbox(args);
           return client.status(inbox, stringSet(args, "channels"));
+        });
+  }
+
+  private AgentTool restTool() {
+    return tool(
+        "inbox_rest",
+        "Ask the caller's wake adapter to pause inbox followups for a bounded duration. This does not mutate inbox items; it is a session/binding hint.",
+        schema(
+            Map.of(
+                "inbox", prop("string", "Inbox id; defaults to the client default."),
+                "restSeconds",
+                    prop(
+                        "integer", "0..86400; 0 clears rest. The owning adapter applies it to this session.")),
+            List.of("restSeconds")),
+        args -> {
+          String inbox = inbox(args);
+          int seconds = intValue(args, "restSeconds", 0);
+          if (seconds < 0 || seconds > 86400) {
+            throw new IllegalArgumentException("restSeconds 必须在 0..86400");
+          }
+          Map<String, Object> result = new LinkedHashMap<>();
+          result.put("inbox", inbox);
+          result.put("restSeconds", seconds);
+          result.put("scope", "adapter-session");
+          return result;
         });
   }
 

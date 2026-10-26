@@ -145,6 +145,7 @@ class InboxClientAndMcpToolsTest {
             .extracting(McpSchema.Tool::name)
             .contains(
                 "inbox_status",
+                "inbox_rest",
                 "inbox_list",
                 "inbox_claim",
                 "inbox_complete",

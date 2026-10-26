@@ -45,6 +45,7 @@ class InboxMcpServerTest {
             .extracting(McpSchema.Tool::name)
             .containsExactlyInAnyOrder(
                 "inbox_status",
+                "inbox_rest",
                 "inbox_list",
                 "inbox_claim",
                 "inbox_renew",
@@ -71,6 +72,12 @@ class InboxMcpServerTest {
         JsonNode push = json(pushed);
         assertThat(push.get("itemId").asText()).startsWith("itm_");
         String itemId = push.get("itemId").asText();
+
+        McpSchema.CallToolResult rest =
+            client.callTool(call("inbox_rest", Map.of("restSeconds", 30)));
+        JsonNode restJson = json(rest);
+        assertThat(restJson.get("restSeconds").asInt()).isEqualTo(30);
+        assertThat(restJson.get("scope").asText()).isEqualTo("adapter-session");
 
         McpSchema.CallToolResult listed =
             client.callTool(call("inbox_list", Map.of()));

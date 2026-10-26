@@ -45,6 +45,7 @@ public final class InboxMcpTools {
   public List<AgentTool> all() {
     return List.of(
         statusTool(),
+        restTool(),
         listTool(),
         viewTool(),
         updateTool(),
@@ -83,6 +84,32 @@ public final class InboxMcpTools {
           result.put("occupiedBy", status.occupancy().occupiedBy());
           result.put(
               "occupiedAt", McpToolSupport.timestamp(status.occupancy().occupiedAt()));
+          return result;
+        });
+  }
+
+  private AgentTool restTool() {
+    return tool(
+        "inbox_rest",
+        "Ask the caller's wake adapter to pause inbox followups for a bounded duration. This does not mutate inbox items; it is a session/binding hint.",
+        McpToolSupport.schema(
+            Map.of(
+                "inbox", McpToolSupport.prop("string", "Inbox id; defaults to the server default."),
+                "restSeconds",
+                    McpToolSupport.prop(
+                        "integer", "0..86400; 0 clears rest. The owning adapter applies it to this session.")),
+            List.of("restSeconds"),
+            false),
+        args -> {
+          String inbox = McpToolSupport.inbox(args, defaultInbox);
+          int seconds = McpToolSupport.intValue(args, "restSeconds", 0);
+          if (seconds < 0 || seconds > 86400) {
+            throw new IllegalArgumentException("restSeconds 必须在 0..86400");
+          }
+          Map<String, Object> result = new LinkedHashMap<>();
+          result.put("inbox", inbox);
+          result.put("restSeconds", seconds);
+          result.put("scope", "adapter-session");
           return result;
         });
   }
