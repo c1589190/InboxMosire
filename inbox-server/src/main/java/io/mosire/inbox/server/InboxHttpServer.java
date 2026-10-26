@@ -4,10 +4,13 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.mosire.inbox.core.InboxException;
 import io.mosire.inbox.core.InboxService;
+import io.mosire.inbox.core.AppendItemCommand;
 import io.mosire.inbox.core.CompleteResult;
 import io.mosire.inbox.core.Completion;
 import io.mosire.inbox.core.CompletionOutcome;
 import io.mosire.inbox.core.InboxStatus;
+import io.mosire.inbox.core.ItemDetail;
+import io.mosire.inbox.core.ItemMutationResult;
 import io.mosire.inbox.core.ItemSummary;
 import io.mosire.inbox.core.ClaimResult;
 import io.mosire.inbox.core.ReleaseResult;
@@ -15,6 +18,7 @@ import io.mosire.inbox.core.RenewResult;
 import io.mosire.inbox.core.PushCommand;
 import io.mosire.inbox.core.PushResult;
 import io.mosire.inbox.core.StoredEvent;
+import io.mosire.inbox.core.UpdateItemCommand;
 import io.mosire.inbox.sqlite.ApiCredential;
 import io.mosire.inbox.sqlite.IssuedCredential;
 import io.mosire.inbox.sqlite.SqliteApiCredentialStore;
@@ -156,6 +160,19 @@ public final class InboxHttpServer implements AutoCloseable {
       routeClaimAction(exchange, segments.get(2), segments.get(4));
       return;
     }
+    if (segments.size() == 5
+        && "inboxes".equals(segments.get(1))
+        && "items".equals(segments.get(3))) {
+      routeItem(exchange, segments.get(2), segments.get(4));
+      return;
+    }
+    if (segments.size() == 6
+        && "inboxes".equals(segments.get(1))
+        && "items".equals(segments.get(3))
+        && "append".equals(segments.get(5))) {
+      routeAppend(exchange, segments.get(2), segments.get(4));
+      return;
+    }
     sendJson(exchange, 404, new ApiError("NOT_FOUND", "路由不存在").body());
   }
 
@@ -268,7 +285,7 @@ public final class InboxHttpServer implements AutoCloseable {
     if (!requiresScope(exchange, credential, ApiScopes.ADMIN_CREDENTIALS)) {
       return;
     }
-    String inbox = queryParam(exchange, "inbox");
+    String inbox = queryParamStatic(exchange, "inbox");
     List<CredentialView> views =
         credentials.list(inbox).stream().map(CredentialView::from).toList();
     sendJson(exchange, 200, Map.of("credentials", views));
@@ -419,12 +436,10 @@ public final class InboxHttpServer implements AutoCloseable {
       sendJson(exchange, 403, new ApiError("FORBIDDEN", "token 无权写入该 channel").body());
       return;
     }
-    String payload =
-        request.payload() == null
-            ? null
-            : request.payload().isTextual()
-                ? request.payload().asText()
-                : InboxJson.MAPPER.writeValueAsString(request.payload());
+    String content = jsonContent(request.content() != null ? request.content() : request.payload());
+    String summary = request.summary() != null ? request.summary() : request.title();
+    String contentRef =
+        request.contentRef() != null ? request.contentRef() : request.payloadRef();
     String kind = request.kind() == null || request.kind().isBlank() ? "notification" : request.kind();
     PushResult result =
         service.push(
@@ -432,9 +447,9 @@ public final class InboxHttpServer implements AutoCloseable {
                 inboxId,
                 channel,
                 kind,
-                request.title(),
-                payload,
-                request.payloadRef(),
+                summary,
+                content,
+                contentRef,
                 request.dedupeKey(),
                 request.priority(),
                 null));
@@ -452,7 +467,7 @@ public final class InboxHttpServer implements AutoCloseable {
       throws IOException {
     Set<String> channels = effectiveChannels(channels(exchange), credential);
     int limit = 50;
-    String rawLimit = queryParam(exchange, "limit");
+    String rawLimit = queryParamStatic(exchange, "limit");
     if (rawLimit != null) {
       try {
         limit = Integer.parseInt(rawLimit);
@@ -461,7 +476,136 @@ public final class InboxHttpServer implements AutoCloseable {
       }
     }
     List<ItemSummary> items = service.listAvailable(inboxId, channels, limit);
-    sendJson(exchange, 200, new ItemListResponse(inboxId, items, items.size()));
+    List<ItemSummaryView> views = items.stream().map(ItemSummaryView::from).toList();
+    sendJson(exchange, 200, new ItemListResponse(inboxId, views, views.size()));
+  }
+
+  private void routeItem(HttpExchange exchange, String inboxId, String itemId)
+      throws IOException {
+    ApiCredential credential = requireAuth(exchange);
+    if (credential == null) {
+      return;
+    }
+    if (!credential.allowsInbox(inboxId)) {
+      sendJson(exchange, 403, new ApiError("FORBIDDEN", "token 无权访问该 inbox").body());
+      return;
+    }
+    if (!service.inboxExists(inboxId)) {
+      sendJson(exchange, 404, new ApiError("NOT_FOUND", "inbox 不存在").body());
+      return;
+    }
+    switch (exchange.getRequestMethod()) {
+      case "GET" -> {
+        if (!requiresScope(exchange, credential, ApiScopes.ITEMS_READ)) {
+          return;
+        }
+        ItemDetail detail =
+            service.viewItem(inboxId, itemId, itemChannelScope(credential));
+        sendJson(exchange, 200, ItemDetailView.from(detail));
+      }
+      case "PATCH" -> {
+        if (!requiresScope(exchange, credential, ApiScopes.ITEMS_MANAGE)) {
+          return;
+        }
+        UpdateItemRequest request = readJsonBody(exchange, UpdateItemRequest.class);
+        if (request == null) {
+          return;
+        }
+        ItemMutationResult result =
+            service.updateItem(
+                new UpdateItemCommand(
+                    inboxId,
+                    itemId,
+                    request.summary(),
+                    jsonContent(request.content()),
+                    request.contentRef(),
+                    request.kind(),
+                    request.priority(),
+                    request.expectedRevision()),
+                itemChannelScope(credential));
+        sendJson(exchange, 200, result);
+      }
+      case "DELETE" -> {
+        if (!requiresScope(exchange, credential, ApiScopes.ITEMS_MANAGE)) {
+          return;
+        }
+        Long expectedRevision = queryLong(exchange, "expectedRevision");
+        ItemMutationResult result =
+            service.deleteItem(
+                inboxId, itemId, expectedRevision, itemChannelScope(credential));
+        sendJson(exchange, 200, result);
+      }
+      default -> methodNotAllowed(exchange, "GET, PATCH, DELETE");
+    }
+  }
+
+  private void routeAppend(HttpExchange exchange, String inboxId, String itemId)
+      throws IOException {
+    if (!"POST".equals(exchange.getRequestMethod())) {
+      methodNotAllowed(exchange, "POST");
+      return;
+    }
+    ApiCredential credential = requireAuth(exchange);
+    if (credential == null) {
+      return;
+    }
+    if (!credential.allowsInbox(inboxId)) {
+      sendJson(exchange, 403, new ApiError("FORBIDDEN", "token 无权访问该 inbox").body());
+      return;
+    }
+    if (!service.inboxExists(inboxId)) {
+      sendJson(exchange, 404, new ApiError("NOT_FOUND", "inbox 不存在").body());
+      return;
+    }
+    if (!requiresScope(exchange, credential, ApiScopes.ITEMS_MANAGE)) {
+      return;
+    }
+    AppendItemRequest request = readJsonBody(exchange, AppendItemRequest.class);
+    if (request == null) {
+      return;
+    }
+    ItemMutationResult result =
+        service.appendItem(
+            new AppendItemCommand(
+                inboxId,
+                itemId,
+                jsonContent(request.content()),
+                request.summary(),
+                request.priority(),
+                request.expectedRevision()),
+            itemChannelScope(credential));
+    sendJson(exchange, 200, result);
+  }
+
+  private static String jsonContent(com.fasterxml.jackson.databind.JsonNode value)
+      throws IOException {
+    if (value == null || value.isNull()) {
+      return null;
+    }
+    return value.isTextual() ? value.asText() : InboxJson.MAPPER.writeValueAsString(value);
+  }
+
+  private static Set<String> itemChannelScope(ApiCredential credential) {
+    if (credential.channels().isEmpty() || credential.channels().contains("*")) {
+      return Set.of();
+    }
+    return credential.channels();
+  }
+
+  private static Long queryLong(HttpExchange exchange, String name) {
+    String raw = queryParamStatic(exchange, name);
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    try {
+      long value = Long.parseLong(raw);
+      if (value < 0) {
+        throw new NumberFormatException();
+      }
+      return value;
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException(name + " 必须是非负整数");
+    }
   }
 
   private void claimItems(HttpExchange exchange, String inboxId, ApiCredential credential)
@@ -700,7 +844,7 @@ public final class InboxHttpServer implements AutoCloseable {
     return Set.copyOf(out);
   }
 
-  private String queryParam(HttpExchange exchange, String name) {
+  private static String queryParamStatic(HttpExchange exchange, String name) {
     String raw = exchange.getRequestURI().getRawQuery();
     if (raw == null || raw.isBlank()) {
       return null;
@@ -867,7 +1011,77 @@ public final class InboxHttpServer implements AutoCloseable {
 
   record OccupancyRequest(String occupiedBy) {}
 
-  record ItemListResponse(String inbox, List<ItemSummary> items, int count) {}
+  record ItemSummaryView(
+      String itemId,
+      String channel,
+      String kind,
+      String summary,
+      String title,
+      int priority,
+      int attempts,
+      String createdAt) {
+    static ItemSummaryView from(ItemSummary item) {
+      return new ItemSummaryView(
+          item.itemId(),
+          item.channel(),
+          item.kind(),
+          item.summary(),
+          item.summary(),
+          item.priority(),
+          item.attempts(),
+          item.createdAt().toString());
+    }
+  }
+
+  record ItemListResponse(String inbox, List<ItemSummaryView> items, int count) {}
+
+  record ItemDetailView(
+      String itemId,
+      String inbox,
+      String channel,
+      String kind,
+      String summary,
+      String title,
+      String content,
+      String contentRef,
+      int priority,
+      String status,
+      int attempts,
+      long revision,
+      String createdAt,
+      String updatedAt) {
+    static ItemDetailView from(ItemDetail item) {
+      return new ItemDetailView(
+          item.itemId(),
+          item.inboxId(),
+          item.channel(),
+          item.kind(),
+          item.summary(),
+          item.summary(),
+          item.content(),
+          item.contentRef(),
+          item.priority(),
+          item.status().wireValue(),
+          item.attempts(),
+          item.revision(),
+          item.createdAt().toString(),
+          item.updatedAt().toString());
+    }
+  }
+
+  record UpdateItemRequest(
+      String summary,
+      com.fasterxml.jackson.databind.JsonNode content,
+      String contentRef,
+      String kind,
+      Integer priority,
+      Long expectedRevision) {}
+
+  record AppendItemRequest(
+      com.fasterxml.jackson.databind.JsonNode content,
+      String summary,
+      Integer priority,
+      Long expectedRevision) {}
 
   record ClaimRequest(List<String> itemIds, Long leaseSeconds) {}
 
@@ -917,8 +1131,11 @@ public final class InboxHttpServer implements AutoCloseable {
   record PushRequest(
       String channel,
       String kind,
+      String summary,
       String title,
+      com.fasterxml.jackson.databind.JsonNode content,
       com.fasterxml.jackson.databind.JsonNode payload,
+      String contentRef,
       String payloadRef,
       String dedupeKey,
       int priority) {}

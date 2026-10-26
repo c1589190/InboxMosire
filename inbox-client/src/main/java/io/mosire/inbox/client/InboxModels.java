@@ -34,19 +34,24 @@ public final class InboxModels {
       String itemId,
       String channel,
       String kind,
-      String title,
+      String summary,
       int priority,
       int attempts,
-      String createdAt) {}
+      String createdAt) {
+    @Deprecated
+    public String title() {
+      return summary;
+    }
+  }
 
   public record ItemList(String inbox, List<ItemSummary> items, int count) {}
 
   public record PushItem(
       String channel,
       String kind,
-      String title,
-      Object payload,
-      String payloadRef,
+      String summary,
+      Object content,
+      String contentRef,
       String dedupeKey,
       int priority) {
     public static Builder builder(String channel) {
@@ -56,9 +61,9 @@ public final class InboxModels {
     public static final class Builder {
       private final String channel;
       private String kind = "notification";
-      private String title;
-      private Object payload;
-      private String payloadRef;
+      private String summary;
+      private Object content;
+      private String contentRef;
       private String dedupeKey;
       private int priority;
 
@@ -71,18 +76,39 @@ public final class InboxModels {
         return this;
       }
 
+      public Builder summary(String value) {
+        this.summary = value;
+        return this;
+      }
+
+      public Builder content(Object value) {
+        this.content = value;
+        return this;
+      }
+
+      public Builder contentRef(String value) {
+        this.contentRef = value;
+        return this;
+      }
+
+      /** @deprecated use summary() */
+      @Deprecated
       public Builder title(String value) {
-        this.title = value;
+        this.summary = value;
         return this;
       }
 
+      /** @deprecated use content() */
+      @Deprecated
       public Builder payload(Object value) {
-        this.payload = value;
+        this.content = value;
         return this;
       }
 
+      /** @deprecated use contentRef() */
+      @Deprecated
       public Builder payloadRef(String value) {
-        this.payloadRef = value;
+        this.contentRef = value;
         return this;
       }
 
@@ -95,8 +121,9 @@ public final class InboxModels {
         this.priority = value;
         return this;
       }
+
       public PushItem build() {
-        return new PushItem(channel, kind, title, payload, payloadRef, dedupeKey, priority);
+        return new PushItem(channel, kind, summary, content, contentRef, dedupeKey, priority);
       }
     }
   }
@@ -107,12 +134,56 @@ public final class InboxModels {
       String itemId,
       String channel,
       String kind,
-      String title,
-      Object payload,
-      String payloadRef,
+      String summary,
+      Object content,
+      String contentRef,
       int priority,
       String claimToken,
-      String claimExpiresAt) {}
+      String claimExpiresAt) {
+    @Deprecated
+    public String title() {
+      return summary;
+    }
+
+    @Deprecated
+    public Object payload() {
+      return content;
+    }
+
+    @Deprecated
+    public String payloadRef() {
+      return contentRef;
+    }
+  }
+
+  public record ItemDetail(
+      String itemId,
+      String inbox,
+      String channel,
+      String kind,
+      String summary,
+      Object content,
+      String contentRef,
+      int priority,
+      String status,
+      int attempts,
+      long revision,
+      String createdAt,
+      String updatedAt) {}
+
+  public record UpdateItem(
+      String summary,
+      Object content,
+      String contentRef,
+      String kind,
+      Integer priority,
+      Long expectedRevision) {}
+
+  public record AppendItem(
+      Object content, String summary, Integer priority, Long expectedRevision) {}
+
+  public record ItemMutation(
+      String itemId, long revision, long available, String updatedAt, boolean deleted) {}
 
   public record Rejection(String subject, String code, String message) {}
 

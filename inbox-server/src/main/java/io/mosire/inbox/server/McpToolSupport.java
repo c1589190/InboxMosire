@@ -74,28 +74,62 @@ final class McpToolSupport {
     }
   }
 
+  static long longValue(Map<String, Object> args, String key, long defaultValue) {
+    Object value = args.get(key);
+    if (value == null) {
+      return defaultValue;
+    }
+    if (value instanceof Number number) {
+      return number.longValue();
+    }
+    try {
+      return Long.parseLong(value.toString());
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException(key + " 必须是整数");
+    }
+  }
+
   static Duration lease(Map<String, Object> args) {
     return Duration.ofSeconds(intValue(args, "leaseSeconds", 300));
   }
 
   static PushResult push(InboxService service, Map<String, Object> args, String defaultInbox) {
     String inbox = inbox(args, defaultInbox);
-    String payload = null;
-    JsonNode payloadNode = InboxJson.MAPPER.valueToTree(args.get("payload"));
-    if (payloadNode != null && !payloadNode.isNull()) {
-      payload = payloadNode.isTextual() ? payloadNode.asText() : payloadNode.toString();
+    String summary = optionalString(args, "summary");
+    if (summary == null) {
+      summary = optionalString(args, "title");
+    }
+    JsonNode contentNode = InboxJson.MAPPER.valueToTree(args.get("content"));
+    if (contentNode == null || contentNode.isNull()) {
+      contentNode = InboxJson.MAPPER.valueToTree(args.get("payload"));
+    }
+    String content = null;
+    if (contentNode != null && !contentNode.isNull()) {
+      content = contentNode.isTextual() ? contentNode.asText() : contentNode.toString();
+    }
+    String contentRef = optionalString(args, "contentRef");
+    if (contentRef == null) {
+      contentRef = optionalString(args, "payloadRef");
     }
     return service.push(
         new PushCommand(
             inbox,
             requiredString(args, "channel"),
             optionalString(args, "kind") == null ? "notification" : optionalString(args, "kind"),
-            optionalString(args, "title"),
-            payload,
-            optionalString(args, "payloadRef"),
+            summary,
+            content,
+            contentRef,
             optionalString(args, "dedupeKey"),
             intValue(args, "priority", 0),
             null));
+  }
+
+  static String contentValue(Object value) {
+    JsonNode node = InboxJson.MAPPER.valueToTree(value);
+    if (node == null || node.isNull()) {
+      return null;
+    }
+    return node.isTextual() ? node.asText() : node.toString();
   }
 
   static Map<String, Object> schema(

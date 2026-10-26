@@ -3,6 +3,7 @@ package io.mosire.inbox.sqlite;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.mosire.inbox.core.AppendItemCommand;
 import io.mosire.inbox.core.ChannelCounts;
 import io.mosire.inbox.core.ClaimRejection;
 import io.mosire.inbox.core.ClaimResult;
@@ -12,8 +13,12 @@ import io.mosire.inbox.core.Completion;
 import io.mosire.inbox.core.CompletionAck;
 import io.mosire.inbox.core.CompletionOutcome;
 import io.mosire.inbox.core.InboxOccupancy;
+import io.mosire.inbox.core.InboxException;
 import io.mosire.inbox.core.InboxStatus;
 import io.mosire.inbox.core.InboxStore;
+import io.mosire.inbox.core.ItemDetail;
+import io.mosire.inbox.core.ItemMutationResult;
+import io.mosire.inbox.core.ItemStatus;
 import io.mosire.inbox.core.ItemSummary;
 import io.mosire.inbox.core.PushCommand;
 import io.mosire.inbox.core.PushResult;
@@ -21,6 +26,7 @@ import io.mosire.inbox.core.ReleaseResult;
 import io.mosire.inbox.core.RenewResult;
 import io.mosire.inbox.core.RenewedClaim;
 import io.mosire.inbox.core.StoredEvent;
+import io.mosire.inbox.core.UpdateItemCommand;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -259,9 +265,9 @@ public final class SqliteInboxStore implements InboxStore {
             ps.setString(2, command.inboxId());
             ps.setString(3, command.channel());
             ps.setString(4, command.kind());
-            ps.setString(5, command.title());
-            ps.setString(6, command.payload());
-            ps.setString(7, command.payloadRef());
+            ps.setString(5, command.summary());
+            ps.setString(6, command.content());
+            ps.setString(7, command.contentRef());
             ps.setString(8, command.dedupeKey());
             ps.setInt(9, command.priority());
             ps.setLong(10, revision);
@@ -411,6 +417,189 @@ public final class SqliteInboxStore implements InboxStore {
       throw SqliteSupport.internal("列出 available item 失败", e);
     } finally {
       lock.unlock();
+    }
+  }
+
+  @Override
+  public ItemDetail viewItem(String inboxId, String itemId, Set<String> allowedChannels) {
+    lock.lock();
+    try {
+      ItemRow row = findActiveItemLocked(inboxId, itemId);
+      requireAllowedChannel(row.channel(), allowedChannels);
+      return row.detail();
+    } catch (SQLException e) {
+      throw SqliteSupport.internal("查看 item 失败", e);
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  @Override
+  public ItemMutationResult updateItem(
+      UpdateItemCommand command, Instant now, Set<String> allowedChannels) {
+    return mutateAvailableItem(
+        command.inboxId(),
+        command.itemId(),
+        command.expectedRevision(),
+        allowedChannels,
+        now,
+        row -> new ItemUpdate(
+            command.summary() == null ? row.summary() : command.summary(),
+            command.content() == null ? row.content() : command.content(),
+            command.contentRef() == null ? row.contentRef() : command.contentRef(),
+            command.kind() == null ? row.kind() : command.kind(),
+            command.priority() == null ? row.priority() : command.priority()));
+  }
+
+  @Override
+  public ItemMutationResult appendItem(
+      AppendItemCommand command, Instant now, Set<String> allowedChannels) {
+    return mutateAvailableItem(
+        command.inboxId(),
+        command.itemId(),
+        command.expectedRevision(),
+        allowedChannels,
+        now,
+        row -> {
+          String appended =
+              row.content() == null || row.content().isBlank()
+                  ? command.content()
+                  : row.content() + "\n" + command.content();
+          return new ItemUpdate(
+              command.summary() == null ? row.summary() : command.summary(),
+              appended,
+              row.contentRef(),
+              row.kind(),
+              command.priority() == null ? row.priority() : command.priority());
+        });
+  }
+
+  @Override
+  public ItemMutationResult deleteItem(
+      String inboxId,
+      String itemId,
+      Long expectedRevision,
+      Instant now,
+      Set<String> allowedChannels) {
+    return inTransaction(
+        () -> {
+          ItemRow row = findActiveItemLocked(inboxId, itemId);
+          requireAllowedChannel(row.channel(), allowedChannels);
+          requireAvailable(row);
+          requireExpectedRevision(row, expectedRevision);
+          long revision = nextRevisionLocked(inboxId, now);
+          try (PreparedStatement ps =
+              connection.prepareStatement(
+                  """
+                  UPDATE inbox_item
+                  SET status = 'done', revision = ?, updated_at = ?, completed_at = ?,
+                      outcome = 'deleted', outcome_summary = 'deleted by inbox_delete'
+                  WHERE id = ?
+                  """)) {
+            ps.setLong(1, revision);
+            ps.setString(2, now.toString());
+            ps.setString(3, now.toString());
+            ps.setString(4, itemId);
+            ps.executeUpdate();
+          }
+          recordEventLocked(inboxId, revision, List.of(row.channel()), now);
+          InboxStatus status = statusLocked(inboxId, Set.of());
+          return new ItemMutationResult(
+              itemId, status.revision(), status.available(), now, true);
+        });
+  }
+
+  private ItemMutationResult mutateAvailableItem(
+      String inboxId,
+      String itemId,
+      Long expectedRevision,
+      Set<String> allowedChannels,
+      Instant now,
+      ItemUpdateFunction updater) {
+    return inTransaction(
+        () -> {
+          ItemRow row = findActiveItemLocked(inboxId, itemId);
+          requireAllowedChannel(row.channel(), allowedChannels);
+          requireAvailable(row);
+          requireExpectedRevision(row, expectedRevision);
+          ItemUpdate update = updater.apply(row);
+          long revision = nextRevisionLocked(inboxId, now);
+          try (PreparedStatement ps =
+              connection.prepareStatement(
+                  """
+                  UPDATE inbox_item
+                  SET title = ?, payload = ?, payload_ref = ?, kind = ?, priority = ?,
+                      revision = ?, updated_at = ?
+                  WHERE id = ? AND status = 'available'
+                  """)) {
+            ps.setString(1, update.summary());
+            ps.setString(2, update.content());
+            ps.setString(3, update.contentRef());
+            ps.setString(4, update.kind());
+            ps.setInt(5, update.priority());
+            ps.setLong(6, revision);
+            ps.setString(7, now.toString());
+            ps.setString(8, itemId);
+            ps.executeUpdate();
+          }
+          recordEventLocked(inboxId, revision, List.of(row.channel()), now);
+          InboxStatus status = statusLocked(inboxId, Set.of());
+          return new ItemMutationResult(
+              itemId, status.revision(), status.available(), now, false);
+        });
+  }
+
+  private ItemRow findActiveItemLocked(String inboxId, String itemId) throws SQLException {
+    try (PreparedStatement ps =
+        connection.prepareStatement(
+            """
+            SELECT id, inbox_id, channel, kind, title, payload, payload_ref, priority,
+                   status, attempts, revision, created_at, updated_at
+            FROM inbox_item
+            WHERE id = ? AND inbox_id = ? AND status <> 'done'
+            """)) {
+      ps.setString(1, itemId);
+      ps.setString(2, inboxId);
+      try (ResultSet rs = ps.executeQuery()) {
+        if (!rs.next()) {
+          throw SqliteSupport.notFound("通知不存在或已归档: " + itemId);
+        }
+        return new ItemRow(
+            rs.getString("id"),
+            rs.getString("inbox_id"),
+            rs.getString("channel"),
+            rs.getString("kind"),
+            rs.getString("title"),
+            rs.getString("payload"),
+            rs.getString("payload_ref"),
+            rs.getInt("priority"),
+            ItemStatus.fromWire(rs.getString("status")),
+            rs.getInt("attempts"),
+            rs.getLong("revision"),
+            Instant.parse(rs.getString("created_at")),
+            Instant.parse(rs.getString("updated_at")));
+      }
+    }
+  }
+
+  private static void requireAllowedChannel(String channel, Set<String> allowedChannels) {
+    if (!allowedChannels.isEmpty() && !allowedChannels.contains(channel)) {
+      throw SqliteSupport.notFound("通知不在 token 的 channel 范围内");
+    }
+  }
+
+  private static void requireAvailable(ItemRow row) {
+    if (row.status() != ItemStatus.AVAILABLE) {
+      throw new InboxException(
+          InboxException.Code.CONFLICT, "通知已被领取或完成，不能修改/删除");
+    }
+  }
+
+  private static void requireExpectedRevision(ItemRow row, Long expectedRevision) {
+    if (expectedRevision != null && expectedRevision != row.revision()) {
+      throw new InboxException(
+          InboxException.Code.CONFLICT,
+          "item revision 不匹配: expected=" + expectedRevision + " actual=" + row.revision());
     }
   }
 
@@ -1134,6 +1323,46 @@ public final class SqliteInboxStore implements InboxStore {
   @FunctionalInterface
   private interface SqlWork<T> {
     T run() throws SQLException;
+  }
+
+  private record ItemUpdate(
+      String summary, String content, String contentRef, String kind, int priority) {}
+
+  private record ItemRow(
+      String itemId,
+      String inboxId,
+      String channel,
+      String kind,
+      String summary,
+      String content,
+      String contentRef,
+      int priority,
+      ItemStatus status,
+      int attempts,
+      long revision,
+      Instant createdAt,
+      Instant updatedAt) {
+    ItemDetail detail() {
+      return new ItemDetail(
+          itemId,
+          inboxId,
+          channel,
+          kind,
+          summary,
+          content,
+          contentRef,
+          priority,
+          status,
+          attempts,
+          revision,
+          createdAt,
+          updatedAt);
+    }
+  }
+
+  @FunctionalInterface
+  private interface ItemUpdateFunction {
+    ItemUpdate apply(ItemRow row);
   }
 
   private record ClaimRow(

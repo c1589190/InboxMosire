@@ -34,6 +34,21 @@ public interface InboxStore extends AutoCloseable {
   List<ItemSummary> listAvailable(
       String inboxId, Set<String> channels, int limit, Instant now);
 
+  ItemDetail viewItem(String inboxId, String itemId, Set<String> allowedChannels);
+
+  ItemMutationResult updateItem(
+      UpdateItemCommand command, Instant now, Set<String> allowedChannels);
+
+  ItemMutationResult appendItem(
+      AppendItemCommand command, Instant now, Set<String> allowedChannels);
+
+  ItemMutationResult deleteItem(
+      String inboxId,
+      String itemId,
+      Long expectedRevision,
+      Instant now,
+      Set<String> allowedChannels);
+
   ClaimResult claim(String inboxId, List<String> itemIds, Duration lease, Instant now);
 
   /**

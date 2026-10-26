@@ -108,6 +108,31 @@ class InboxServiceTest {
     @Override public List<ItemSummary> listAvailable(String inboxId, Set<String> channels, int limit, Instant now) { return List.of(); }
 
     @Override
+    public ItemDetail viewItem(String inboxId, String itemId, Set<String> allowedChannels) {
+      return new ItemDetail(itemId, inboxId, "ticket", "reply", "s", "c", null, 0,
+          ItemStatus.AVAILABLE, 0, 1, NOW, NOW);
+    }
+
+    @Override
+    public ItemMutationResult updateItem(
+        UpdateItemCommand command, Instant now, Set<String> allowedChannels) {
+      return new ItemMutationResult(command.itemId(), 1, 1, now, false);
+    }
+
+    @Override
+    public ItemMutationResult appendItem(
+        AppendItemCommand command, Instant now, Set<String> allowedChannels) {
+      return new ItemMutationResult(command.itemId(), 1, 1, now, false);
+    }
+
+    @Override
+    public ItemMutationResult deleteItem(
+        String inboxId, String itemId, Long expectedRevision, Instant now,
+        Set<String> allowedChannels) {
+      return new ItemMutationResult(itemId, 1, 0, now, true);
+    }
+
+    @Override
     public ClaimResult claim(String inboxId, List<String> itemIds, Duration lease, Instant now) {
       claimCalls++;
       return new ClaimResult(0, 0, List.of(), List.of());

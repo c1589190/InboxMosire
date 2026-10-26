@@ -35,8 +35,8 @@ class EmbeddedInboxServerTest {
               .push(
                   "app-a",
                   InboxModels.PushItem.builder("ticket")
-                      .title("embedded")
-                      .payload(java.util.Map.of("body", "EMBEDDED_BODY"))
+                      .summary("embedded")
+                      .content(java.util.Map.of("body", "EMBEDDED_BODY"))
                       .build());
       assertThat(pushed.itemId()).startsWith("itm_");
       InboxModels.ClaimResult claimed =

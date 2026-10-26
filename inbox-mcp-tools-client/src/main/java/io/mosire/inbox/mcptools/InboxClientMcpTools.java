@@ -37,6 +37,10 @@ public final class InboxClientMcpTools {
     return List.of(
         statusTool(),
         listTool(),
+        viewTool(),
+        updateTool(),
+        appendTool(),
+        deleteTool(),
         claimTool(),
         renewTool(),
         completeTool(),
@@ -66,7 +70,7 @@ public final class InboxClientMcpTools {
   private AgentTool listTool() {
     return tool(
         "inbox_list",
-        "List available inbox items. Returns ids, channels, kinds and safe titles only; call inbox_claim for payloads.",
+        "List available inbox items. Returns ids, channels, kinds and safe summaries only; call inbox_view for full content or inbox_claim to claim work.",
         schema(
             Map.of(
                 "inbox", prop("string", "Inbox id; defaults to the client default."),
@@ -79,10 +83,101 @@ public final class InboxClientMcpTools {
         });
   }
 
+  private AgentTool viewTool() {
+    return tool(
+        "inbox_view",
+        "Read one notification summary and full opaque content without claiming it.",
+        schema(
+            Map.of(
+                "inbox", prop("string", "Inbox id; defaults to the client default."),
+                "itemId", prop("string", "Notification id.")),
+            List.of("itemId")),
+        args -> client.view(inbox(args), requiredString(args, "itemId")));
+  }
+
+  private AgentTool updateTool() {
+    return tool(
+        "inbox_update",
+        "Replace mutable notification fields. Only available items may be updated; claimed items return CONFLICT.",
+        schema(
+            Map.of(
+                "inbox", prop("string", "Inbox id; defaults to the client default."),
+                "itemId", prop("string", "Notification id."),
+                "summary", prop("string", "New short summary."),
+                "content", Map.of("description", "New opaque content."),
+                "contentRef", prop("string", "Optional external content reference."),
+                "kind", prop("string", "New kind."),
+                "priority", prop("integer", "New priority -1000..1000."),
+                "expectedRevision", prop("integer", "Optional optimistic revision guard.")),
+            List.of("itemId")),
+        args -> {
+          Object content = args.get("content");
+          return client.update(
+              inbox(args),
+              requiredString(args, "itemId"),
+              new InboxModels.UpdateItem(
+                  optionalString(args, "summary"),
+                  contentValue(content),
+                  optionalString(args, "contentRef"),
+                  optionalString(args, "kind"),
+                  args.get("priority") == null
+                      ? null
+                      : intValue(args, "priority", 0),
+                  args.get("expectedRevision") == null
+                      ? null
+                      : longValue(args, "expectedRevision", 0)));
+        });
+  }
+
+  private AgentTool appendTool() {
+    return tool(
+        "inbox_append",
+        "Append opaque text content to an available notification, optionally updating summary/priority.",
+        schema(
+            Map.of(
+                "inbox", prop("string", "Inbox id; defaults to the client default."),
+                "itemId", prop("string", "Notification id."),
+                "content", Map.of("description", "Content to append."),
+                "summary", prop("string", "Optional new summary."),
+                "priority", prop("integer", "Optional new priority."),
+                "expectedRevision", prop("integer", "Optional optimistic revision guard.")),
+            List.of("itemId", "content")),
+        args -> client.append(
+            inbox(args),
+            requiredString(args, "itemId"),
+            new InboxModels.AppendItem(
+                contentValue(args.get("content")),
+                optionalString(args, "summary"),
+                args.get("priority") == null
+                    ? null
+                    : intValue(args, "priority", 0),
+                args.get("expectedRevision") == null
+                    ? null
+                    : longValue(args, "expectedRevision", 0))));
+  }
+
+  private AgentTool deleteTool() {
+    return tool(
+        "inbox_delete",
+        "Archive/delete an available notification. Claimed items return CONFLICT.",
+        schema(
+            Map.of(
+                "inbox", prop("string", "Inbox id; defaults to the client default."),
+                "itemId", prop("string", "Notification id."),
+                "expectedRevision", prop("integer", "Optional optimistic revision guard.")),
+            List.of("itemId")),
+        args -> client.deleteItem(
+            inbox(args),
+            requiredString(args, "itemId"),
+            args.get("expectedRevision") == null
+                ? null
+                : longValue(args, "expectedRevision", 0)));
+  }
+
   private AgentTool claimTool() {
     return tool(
         "inbox_claim",
-        "Atomically claim selected item ids. Returns claimToken per item; payload is returned only here.",
+        "Atomically claim selected item ids. Returns claimToken and full opaque content per item.",
         schema(
             Map.of(
                 "inbox", prop("string", "Inbox id; defaults to the client default."),
@@ -153,25 +248,29 @@ public final class InboxClientMcpTools {
   private AgentTool pushTool() {
     return tool(
         "inbox_push",
-        "Push a task or notification. Payload is never sent in SSE wakes.",
+        "Push an inbox item with a short summary and opaque content. Content is not sent in wake summaries.",
         schema(
-            Map.of(
-                "inbox", prop("string", "Inbox id; defaults to the client default."),
-                "channel", prop("string", "Logical channel."),
-                "kind", prop("string", "Item kind; defaults to notification."),
-                "title", prop("string", "Short safe title."),
-                "payload", Map.of("description", "Opaque payload."),
-                "payloadRef", prop("string", "Optional external reference."),
-                "dedupeKey", prop("string", "Deduplication key."),
-                "priority", prop("integer", "-1000..1000.")),
+            pushProperties(),
             List.of("channel")),
         args -> {
+          String summary = optionalString(args, "summary");
+          if (summary == null) {
+            summary = optionalString(args, "title");
+          }
+          Object content = args.get("content");
+          if (content == null) {
+            content = args.get("payload");
+          }
+          String contentRef = optionalString(args, "contentRef");
+          if (contentRef == null) {
+            contentRef = optionalString(args, "payloadRef");
+          }
           InboxModels.PushItem.Builder builder =
               InboxModels.PushItem.builder(requiredString(args, "channel"))
                   .kind(optionalString(args, "kind"))
-                  .title(optionalString(args, "title"))
-                  .payload(args.get("payload"))
-                  .payloadRef(optionalString(args, "payloadRef"))
+                  .summary(summary)
+                  .content(contentValue(content))
+                  .contentRef(contentRef)
                   .dedupeKey(optionalString(args, "dedupeKey"))
                   .priority(intValue(args, "priority", 0));
           return client.push(inbox(args), builder.build());
@@ -333,6 +432,46 @@ public final class InboxClientMcpTools {
   private static String optionalString(Map<String, Object> args, String key) {
     Object value = args.get(key);
     return value == null ? null : value.toString();
+  }
+
+  private static Map<String, Object> pushProperties() {
+    Map<String, Object> props = new LinkedHashMap<>();
+    props.put("inbox", prop("string", "Inbox id; defaults to the client default."));
+    props.put("channel", prop("string", "Logical channel."));
+    props.put("kind", prop("string", "Item kind; defaults to notification."));
+    props.put("summary", prop("string", "Short summary shown in list/wake."));
+    props.put("content", Map.of("description", "Opaque full content."));
+    props.put("contentRef", prop("string", "Optional external content reference."));
+    props.put("title", prop("string", "Deprecated alias for summary."));
+    props.put("payload", Map.of("description", "Deprecated alias for content."));
+    props.put("payloadRef", prop("string", "Deprecated alias for contentRef."));
+    props.put("dedupeKey", prop("string", "Deduplication key."));
+    props.put("priority", prop("integer", "-1000..1000."));
+    return props;
+  }
+
+  private static String contentValue(Object value) {
+    if (value == null) {
+      return null;
+    }
+    return JSON.valueToTree(value).isTextual()
+        ? JSON.valueToTree(value).asText()
+        : JSON.valueToTree(value).toString();
+  }
+
+  private static long longValue(Map<String, Object> args, String key, long defaultValue) {
+    Object value = args.get(key);
+    if (value == null) {
+      return defaultValue;
+    }
+    if (value instanceof Number number) {
+      return number.longValue();
+    }
+    try {
+      return Long.parseLong(value.toString());
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException(key + " 必须是整数");
+    }
   }
 
   private static int intValue(Map<String, Object> args, String key, int defaultValue) {

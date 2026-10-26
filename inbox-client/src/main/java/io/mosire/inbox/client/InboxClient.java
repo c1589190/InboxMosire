@@ -120,15 +120,82 @@ public final class InboxClient {
             200));
   }
 
+  public InboxModels.ItemDetail view(String inboxId, String itemId) {
+    return normalizeDetail(
+        requestJson(
+            "GET",
+            "/v1/inboxes/" + encode(inboxId) + "/items/" + encode(itemId),
+            null,
+            InboxModels.ItemDetail.class,
+            200));
+  }
+
+  private static InboxModels.ItemDetail normalizeDetail(InboxModels.ItemDetail detail) {
+    Object content = detail.content();
+    if (content instanceof String text) {
+      try {
+        content = JSON.readTree(text);
+      } catch (IOException ignored) {
+        // 非 JSON 文本原样返回。
+      }
+    }
+    return new InboxModels.ItemDetail(
+        detail.itemId(),
+        detail.inbox(),
+        detail.channel(),
+        detail.kind(),
+        detail.summary(),
+        content,
+        detail.contentRef(),
+        detail.priority(),
+        detail.status(),
+        detail.attempts(),
+        detail.revision(),
+        detail.createdAt(),
+        detail.updatedAt());
+  }
+
+  public InboxModels.ItemMutation update(
+      String inboxId, String itemId, InboxModels.UpdateItem update) {
+    return requestJson(
+        "PATCH",
+        "/v1/inboxes/" + encode(inboxId) + "/items/" + encode(itemId),
+        update,
+        InboxModels.ItemMutation.class,
+        200);
+  }
+
+  public InboxModels.ItemMutation append(
+      String inboxId, String itemId, InboxModels.AppendItem append) {
+    return requestJson(
+        "POST",
+        "/v1/inboxes/" + encode(inboxId) + "/items/" + encode(itemId) + "/append",
+        append,
+        InboxModels.ItemMutation.class,
+        200);
+  }
+
+  public InboxModels.ItemMutation deleteItem(
+      String inboxId, String itemId, Long expectedRevision) {
+    String suffix =
+        expectedRevision == null ? "" : "?expectedRevision=" + expectedRevision;
+    return requestJson(
+        "DELETE",
+        "/v1/inboxes/" + encode(inboxId) + "/items/" + encode(itemId) + suffix,
+        null,
+        InboxModels.ItemMutation.class,
+        200);
+  }
+
   private static InboxModels.ClaimResult normalizeClaim(InboxModels.ClaimResult result) {
     List<InboxModels.ClaimedItem> claimed = new java.util.ArrayList<>();
     for (InboxModels.ClaimedItem item : result.claimed()) {
-      Object payload = item.payload();
-      if (payload instanceof String text) {
+      Object content = item.content();
+      if (content instanceof String text) {
         try {
-          payload = JSON.readTree(text);
+          content = JSON.readTree(text);
         } catch (IOException ignored) {
-          // 非 JSON 文本 payload 原样保留。
+          // 非 JSON 文本 content 原样保留。
         }
       }
       claimed.add(
@@ -136,9 +203,9 @@ public final class InboxClient {
               item.itemId(),
               item.channel(),
               item.kind(),
-              item.title(),
-              payload,
-              item.payloadRef(),
+              item.summary(),
+              content,
+              item.contentRef(),
               item.priority(),
               item.claimToken(),
               item.claimExpiresAt()));

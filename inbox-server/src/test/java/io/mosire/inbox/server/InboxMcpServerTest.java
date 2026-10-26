@@ -50,7 +50,11 @@ class InboxMcpServerTest {
                 "inbox_renew",
                 "inbox_complete",
                 "inbox_release",
-                "inbox_push")
+                "inbox_push",
+                "inbox_view",
+                "inbox_update",
+                "inbox_append",
+                "inbox_delete")
             .doesNotContain("inbox_wait");
 
         McpSchema.CallToolResult pushed =
@@ -60,8 +64,8 @@ class InboxMcpServerTest {
                     Map.of(
                         "channel", "ticket",
                         "kind", "reply",
-                        "title", "MCP task",
-                        "payload", Map.of("body", "payload-secret"),
+                        "summary", "MCP task",
+                        "content", Map.of("body", "payload-secret"),
                         "dedupeKey", "mcp-1")));
         assertThat(pushed.isError()).isFalse();
         JsonNode push = json(pushed);
@@ -73,6 +77,38 @@ class InboxMcpServerTest {
         JsonNode list = json(listed);
         assertThat(list.get("count").asInt()).isEqualTo(1);
         assertThat(list.toString()).doesNotContain("payload-secret");
+        assertThat(list.get("items").get(0).get("summary").asText()).isEqualTo("MCP task");
+
+        McpSchema.CallToolResult viewed =
+            client.callTool(call("inbox_view", Map.of("itemId", itemId)));
+        JsonNode view = json(viewed);
+        assertThat(view.get("summary").asText()).isEqualTo("MCP task");
+        assertThat(view.get("content").get("body").asText()).isEqualTo("payload-secret");
+
+        McpSchema.CallToolResult updated =
+            client.callTool(
+                call(
+                    "inbox_update",
+                    Map.of(
+                        "itemId",
+                        itemId,
+                        "summary",
+                        "MCP task updated",
+                        "content",
+                        "line-one",
+                        "priority",
+                        7)));
+        assertThat(updated.isError()).as(wireText(updated)).isFalse();
+        McpSchema.CallToolResult appended =
+            client.callTool(
+                call("inbox_append", Map.of("itemId", itemId, "content", "line-two")));
+        assertThat(appended.isError()).as(wireText(appended)).isFalse();
+        McpSchema.CallToolResult updatedView =
+            client.callTool(call("inbox_view", Map.of("itemId", itemId)));
+        JsonNode updatedJson = json(updatedView);
+        assertThat(updatedJson.get("summary").asText()).isEqualTo("MCP task updated");
+        assertThat(updatedJson.get("content").asText()).contains("line-one").contains("line-two");
+        assertThat(updatedJson.get("priority").asInt()).isEqualTo(7);
 
         McpSchema.CallToolResult claimed =
             client.callTool(
@@ -81,8 +117,11 @@ class InboxMcpServerTest {
         JsonNode claim = json(claimed);
         assertThat(claim.get("claimed")).hasSize(1);
         String claimToken = claim.get("claimed").get(0).get("claimToken").asText();
-        assertThat(claim.get("claimed").get(0).get("payload").get("body").asText())
-            .isEqualTo("payload-secret");
+        assertThat(claim.get("claimed").get(0).get("summary").asText())
+            .isEqualTo("MCP task updated");
+        assertThat(claim.get("claimed").get(0).get("content").asText())
+            .contains("line-one")
+            .contains("line-two");
 
         McpSchema.CallToolResult completed =
             client.callTool(
@@ -101,6 +140,19 @@ class InboxMcpServerTest {
         JsonNode complete = json(completed);
         assertThat(complete.get("available").asInt()).isZero();
         assertThat(complete.get("completed").get(0).get("idempotent").asBoolean()).isFalse();
+
+        McpSchema.CallToolResult secondPush =
+            client.callTool(
+                call(
+                    "inbox_push",
+                    Map.of("channel", "ticket", "summary", "delete me", "content", "x")));
+        String secondId = json(secondPush).get("itemId").asText();
+        McpSchema.CallToolResult deleted =
+            client.callTool(call("inbox_delete", Map.of("itemId", secondId)));
+        assertThat(deleted.isError()).as(wireText(deleted)).isFalse();
+        assertThat(json(deleted).get("deleted").asBoolean()).isTrue();
+        assertThat(json(client.callTool(call("inbox_list", Map.of()))).get("count").asInt())
+            .isZero();
 
         McpSchema.CallToolResult bad =
             client.callTool(call("inbox_claim", Map.of()));

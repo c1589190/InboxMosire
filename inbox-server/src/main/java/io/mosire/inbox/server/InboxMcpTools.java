@@ -3,6 +3,7 @@ package io.mosire.inbox.server;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.mosire.agentlib.tool.AgentTool;
 import io.mosire.agentlib.tool.ToolResult;
+import io.mosire.inbox.core.AppendItemCommand;
 import io.mosire.inbox.core.ClaimRejection;
 import io.mosire.inbox.core.ClaimResult;
 import io.mosire.inbox.core.ClaimedItem;
@@ -13,11 +14,14 @@ import io.mosire.inbox.core.CompletionOutcome;
 import io.mosire.inbox.core.InboxException;
 import io.mosire.inbox.core.InboxService;
 import io.mosire.inbox.core.InboxStatus;
+import io.mosire.inbox.core.ItemDetail;
+import io.mosire.inbox.core.ItemMutationResult;
 import io.mosire.inbox.core.ItemSummary;
 import io.mosire.inbox.core.PushResult;
 import io.mosire.inbox.core.ReleaseResult;
 import io.mosire.inbox.core.RenewResult;
 import io.mosire.inbox.core.RenewedClaim;
+import io.mosire.inbox.core.UpdateItemCommand;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -42,6 +46,10 @@ public final class InboxMcpTools {
     return List.of(
         statusTool(),
         listTool(),
+        viewTool(),
+        updateTool(),
+        appendTool(),
+        deleteTool(),
         claimTool(),
         renewTool(),
         completeTool(),
@@ -82,7 +90,7 @@ public final class InboxMcpTools {
   private AgentTool listTool() {
     return tool(
         "inbox_list",
-        "List available inbox items. Returns ids, channels, kinds and safe titles only; call inbox_claim to receive payloads. Agent chooses which items to process.",
+        "List available inbox items. Returns ids, channels, kinds and safe summaries only; call inbox_view for full content or inbox_claim to claim work. Agent chooses which items to process.",
         McpToolSupport.schema(
             Map.of(
                 "inbox", McpToolSupport.prop("string", "Inbox id; defaults to the server default."),
@@ -102,13 +110,116 @@ public final class InboxMcpTools {
                     "itemId", item.itemId(),
                     "channel", item.channel(),
                     "kind", item.kind(),
-                    "title", item.title() == null ? "" : item.title(),
+                    "summary", item.summary() == null ? "" : item.summary(),
+                    "title", item.summary() == null ? "" : item.summary(),
                     "priority", item.priority(),
                     "attempts", item.attempts(),
                     "createdAt", item.createdAt().toString()));
           }
           return Map.of("inbox", inbox, "items", serialized, "count", serialized.size());
         });
+  }
+
+  private AgentTool viewTool() {
+    return tool(
+        "inbox_view",
+        "Read one notification summary and full opaque content without claiming it. Content is not interpreted as a tool call.",
+        McpToolSupport.schema(
+            Map.of(
+                "inbox", McpToolSupport.prop("string", "Inbox id; defaults to the server default."),
+                "itemId", McpToolSupport.prop("string", "Notification id.")),
+            List.of("itemId"),
+            false),
+        args -> itemDetailResult(service.viewItem(
+            McpToolSupport.inbox(args, defaultInbox),
+            McpToolSupport.requiredString(args, "itemId"))));
+  }
+
+  private AgentTool updateTool() {
+    return tool(
+        "inbox_update",
+        "Replace mutable notification fields. Only available items may be updated; claimed items return CONFLICT.",
+        McpToolSupport.schema(
+            Map.of(
+                "inbox", McpToolSupport.prop("string", "Inbox id; defaults to the server default."),
+                "itemId", McpToolSupport.prop("string", "Notification id."),
+                "summary", McpToolSupport.prop("string", "New short summary."),
+                "content", Map.of("description", "New opaque content."),
+                "contentRef", McpToolSupport.prop("string", "Optional external content reference."),
+                "kind", McpToolSupport.prop("string", "New kind."),
+                "priority", McpToolSupport.prop("integer", "New priority -1000..1000."),
+                "expectedRevision", McpToolSupport.prop("integer", "Optional optimistic revision guard.")),
+            List.of("itemId"),
+            false),
+        args -> {
+          ItemMutationResult result =
+              service.updateItem(
+                  new UpdateItemCommand(
+                      McpToolSupport.inbox(args, defaultInbox),
+                      McpToolSupport.requiredString(args, "itemId"),
+                      McpToolSupport.optionalString(args, "summary"),
+                      McpToolSupport.contentValue(args.get("content")),
+                      McpToolSupport.optionalString(args, "contentRef"),
+                      McpToolSupport.optionalString(args, "kind"),
+                      args.get("priority") == null
+                          ? null
+                          : McpToolSupport.intValue(args, "priority", 0),
+                      args.get("expectedRevision") == null
+                          ? null
+                          : McpToolSupport.longValue(args, "expectedRevision", 0)));
+          return mutationResult(result);
+        });
+  }
+
+  private AgentTool appendTool() {
+    return tool(
+        "inbox_append",
+        "Append opaque text content to an available notification, optionally update summary/priority. Only available items are mutable.",
+        McpToolSupport.schema(
+            Map.of(
+                "inbox", McpToolSupport.prop("string", "Inbox id; defaults to the server default."),
+                "itemId", McpToolSupport.prop("string", "Notification id."),
+                "content", Map.of("description", "Text/JSON content to append."),
+                "summary", McpToolSupport.prop("string", "Optional new summary."),
+                "priority", McpToolSupport.prop("integer", "Optional new priority."),
+                "expectedRevision", McpToolSupport.prop("integer", "Optional optimistic revision guard.")),
+            List.of("itemId", "content"),
+            false),
+        args -> {
+          ItemMutationResult result =
+              service.appendItem(
+                  new AppendItemCommand(
+                      McpToolSupport.inbox(args, defaultInbox),
+                      McpToolSupport.requiredString(args, "itemId"),
+                      McpToolSupport.contentValue(args.get("content")),
+                      McpToolSupport.optionalString(args, "summary"),
+                      args.get("priority") == null
+                          ? null
+                          : McpToolSupport.intValue(args, "priority", 0),
+                      args.get("expectedRevision") == null
+                          ? null
+                          : McpToolSupport.longValue(args, "expectedRevision", 0)));
+          return mutationResult(result);
+        });
+  }
+
+  private AgentTool deleteTool() {
+    return tool(
+        "inbox_delete",
+        "Archive/delete an available notification. Claimed items return CONFLICT; use complete for claimed work.",
+        McpToolSupport.schema(
+            Map.of(
+                "inbox", McpToolSupport.prop("string", "Inbox id; defaults to the server default."),
+                "itemId", McpToolSupport.prop("string", "Notification id."),
+                "expectedRevision", McpToolSupport.prop("integer", "Optional optimistic revision guard.")),
+            List.of("itemId"),
+            false),
+        args -> mutationResult(service.deleteItem(
+            McpToolSupport.inbox(args, defaultInbox),
+            McpToolSupport.requiredString(args, "itemId"),
+            args.get("expectedRevision") == null
+                ? null
+                : McpToolSupport.longValue(args, "expectedRevision", 0))));
   }
 
   private AgentTool claimTool() {
@@ -240,15 +351,7 @@ public final class InboxMcpTools {
         "inbox_push",
         "Push a task or notification into the inbox. The agent may use this to schedule its own follow-up work.",
         McpToolSupport.schema(
-            Map.of(
-                "inbox", McpToolSupport.prop("string", "Inbox id; defaults to the server default."),
-                "channel", McpToolSupport.prop("string", "Logical channel."),
-                "kind", McpToolSupport.prop("string", "Item kind; defaults to notification."),
-                "title", McpToolSupport.prop("string", "Short safe title."),
-                "payload", Map.of("description", "Opaque item payload; never sent in SSE wakes."),
-                "payloadRef", McpToolSupport.prop("string", "Optional external payload reference."),
-                "dedupeKey", McpToolSupport.prop("string", "Deduplication key."),
-                "priority", McpToolSupport.prop("integer", "-1000..1000.")),
+            pushProperties(),
             List.of("channel"),
             false),
         args -> {
@@ -269,13 +372,14 @@ public final class InboxMcpTools {
       entry.put("itemId", item.itemId());
       entry.put("channel", item.channel());
       entry.put("kind", item.kind());
-      entry.put("title", item.title());
+      entry.put("summary", item.summary());
+      entry.put("title", item.summary());
       entry.put("priority", item.priority());
       entry.put("claimToken", item.claimToken());
       entry.put("claimExpiresAt", item.claimExpiresAt().toString());
-      entry.put("payload", parsePayload(item.payload()));
-      if (item.payloadRef() != null) {
-        entry.put("payloadRef", item.payloadRef());
+      entry.put("content", parseContent(item.content()));
+      if (item.contentRef() != null) {
+        entry.put("contentRef", item.contentRef());
       }
       claimed.add(entry);
     }
@@ -314,16 +418,60 @@ public final class InboxMcpTools {
     return out;
   }
 
-  private static Object parsePayload(String payload) {
-    if (payload == null || payload.isBlank()) {
+  private static Map<String, Object> itemDetailResult(ItemDetail item) {
+    Map<String, Object> result = new LinkedHashMap<>();
+    result.put("itemId", item.itemId());
+    result.put("inbox", item.inboxId());
+    result.put("channel", item.channel());
+    result.put("kind", item.kind());
+    result.put("summary", item.summary());
+    result.put("title", item.summary());
+    result.put("content", parseContent(item.content()));
+    result.put("contentRef", item.contentRef());
+    result.put("priority", item.priority());
+    result.put("status", item.status().wireValue());
+    result.put("attempts", item.attempts());
+    result.put("revision", item.revision());
+    result.put("createdAt", item.createdAt().toString());
+    result.put("updatedAt", item.updatedAt().toString());
+    return result;
+  }
+
+  private static Map<String, Object> mutationResult(ItemMutationResult result) {
+    return Map.of(
+        "itemId", result.itemId(),
+        "revision", result.revision(),
+        "available", result.available(),
+        "updatedAt", result.updatedAt().toString(),
+        "deleted", result.deleted());
+  }
+
+  private static Object parseContent(String content) {
+    if (content == null || content.isBlank()) {
       return null;
     }
     try {
-      JsonNode node = InboxJson.MAPPER.readTree(payload);
+      JsonNode node = InboxJson.MAPPER.readTree(content);
       return node;
     } catch (Exception ignored) {
-      return payload;
+      return content;
     }
+  }
+
+  private static Map<String, Object> pushProperties() {
+    Map<String, Object> props = new LinkedHashMap<>();
+    props.put("inbox", McpToolSupport.prop("string", "Inbox id; defaults to the server default."));
+    props.put("channel", McpToolSupport.prop("string", "Logical channel."));
+    props.put("kind", McpToolSupport.prop("string", "Item kind; defaults to notification."));
+    props.put("summary", McpToolSupport.prop("string", "Short summary shown in list/wake."));
+    props.put("content", Map.of("description", "Opaque full content, returned only by view/claim."));
+    props.put("contentRef", McpToolSupport.prop("string", "Optional external content reference."));
+    props.put("title", McpToolSupport.prop("string", "Deprecated alias for summary."));
+    props.put("payload", Map.of("description", "Deprecated alias for content."));
+    props.put("payloadRef", McpToolSupport.prop("string", "Deprecated alias for contentRef."));
+    props.put("dedupeKey", McpToolSupport.prop("string", "Deduplication key."));
+    props.put("priority", McpToolSupport.prop("integer", "-1000..1000."));
+    return props;
   }
 
   private AgentTool tool(

@@ -37,9 +37,9 @@ public final class InboxService {
     requireId("inbox", command.inboxId());
     requirePattern("channel", command.channel(), ID);
     requirePattern("kind", command.kind(), KIND);
-    requireText("title", command.title(), MAX_TITLE, true);
-    requireText("payload", command.payload(), MAX_PAYLOAD, false);
-    requireText("payloadRef", command.payloadRef(), MAX_REF, false);
+    requireText("summary", command.summary(), MAX_TITLE, true);
+    requireText("content", command.content(), MAX_PAYLOAD, false);
+    requireText("contentRef", command.contentRef(), MAX_REF, false);
     requireText("dedupeKey", command.dedupeKey(), MAX_DEDUPE, false);
     if (command.priority() < -1000 || command.priority() > 1000) {
       throw invalid("priority 必须在 -1000..1000");
@@ -50,9 +50,9 @@ public final class InboxService {
             command.inboxId(),
             command.channel(),
             command.kind(),
-            command.title(),
-            command.payload(),
-            command.payloadRef(),
+            command.summary(),
+            command.content(),
+            command.contentRef(),
             command.dedupeKey(),
             command.priority(),
             command.availableAt() == null ? now : command.availableAt());
@@ -98,6 +98,99 @@ public final class InboxService {
     }
     sweepExpired();
     return store.listAvailable(inboxId, normalized, limit, clock.instant());
+  }
+
+  public ItemDetail viewItem(String inboxId, String itemId) {
+    return viewItem(inboxId, itemId, Set.of());
+  }
+
+  public ItemDetail viewItem(String inboxId, String itemId, Set<String> allowedChannels) {
+    requireId("inbox", inboxId);
+    requireItemId(itemId);
+    return store.viewItem(inboxId, itemId, normalizeChannels(allowedChannels));
+  }
+
+  public ItemMutationResult updateItem(UpdateItemCommand command) {
+    return updateItem(command, Set.of());
+  }
+
+  public ItemMutationResult updateItem(
+      UpdateItemCommand command, Set<String> allowedChannels) {
+    Objects.requireNonNull(command, "command");
+    requireId("inbox", command.inboxId());
+    requireItemId(command.itemId());
+    boolean any =
+        command.summary() != null
+            || command.content() != null
+            || command.contentRef() != null
+            || command.kind() != null
+            || command.priority() != null;
+    if (!any) {
+      throw invalid("update 至少需要 summary/content/contentRef/kind/priority 之一");
+    }
+    if (command.summary() != null) {
+      requireText("summary", command.summary(), MAX_TITLE, true);
+    }
+    requireText("content", command.content(), MAX_PAYLOAD, false);
+    requireText("contentRef", command.contentRef(), MAX_REF, false);
+    if (command.kind() != null) {
+      requirePattern("kind", command.kind(), KIND);
+    }
+    if (command.priority() != null) {
+      requirePriority(command.priority());
+    }
+    requireExpectedRevision(command.expectedRevision());
+    ItemMutationResult result =
+        store.updateItem(command, clock.instant(), normalizeChannels(allowedChannels));
+    notifier.changed();
+    return result;
+  }
+
+  public ItemMutationResult appendItem(AppendItemCommand command) {
+    return appendItem(command, Set.of());
+  }
+
+  public ItemMutationResult appendItem(
+      AppendItemCommand command, Set<String> allowedChannels) {
+    Objects.requireNonNull(command, "command");
+    requireId("inbox", command.inboxId());
+    requireItemId(command.itemId());
+    requireText("content", command.content(), MAX_PAYLOAD, true);
+    if (command.summary() != null) {
+      requireText("summary", command.summary(), MAX_TITLE, true);
+    }
+    if (command.priority() != null) {
+      requirePriority(command.priority());
+    }
+    requireExpectedRevision(command.expectedRevision());
+    ItemMutationResult result =
+        store.appendItem(command, clock.instant(), normalizeChannels(allowedChannels));
+    notifier.changed();
+    return result;
+  }
+
+  public ItemMutationResult deleteItem(
+      String inboxId, String itemId, Long expectedRevision) {
+    return deleteItem(inboxId, itemId, expectedRevision, Set.of());
+  }
+
+  public ItemMutationResult deleteItem(
+      String inboxId,
+      String itemId,
+      Long expectedRevision,
+      Set<String> allowedChannels) {
+    requireId("inbox", inboxId);
+    requireItemId(itemId);
+    requireExpectedRevision(expectedRevision);
+    ItemMutationResult result =
+        store.deleteItem(
+            inboxId,
+            itemId,
+            expectedRevision,
+            clock.instant(),
+            normalizeChannels(allowedChannels));
+    notifier.changed();
+    return result;
   }
 
   public ClaimResult claim(String inboxId, List<String> itemIds, Duration lease) {
@@ -188,6 +281,22 @@ public final class InboxService {
   public long latestEventSeq(String inboxId) {
     requireId("inbox", inboxId);
     return store.latestEventSeq(inboxId);
+  }
+
+  private static void requireItemId(String itemId) {
+    requireText("itemId", itemId, 512, true);
+  }
+
+  private static void requireExpectedRevision(Long expectedRevision) {
+    if (expectedRevision != null && expectedRevision < 0) {
+      throw invalid("expectedRevision 不能为负数");
+    }
+  }
+
+  private static void requirePriority(int priority) {
+    if (priority < -1000 || priority > 1000) {
+      throw invalid("priority 必须在 -1000..1000");
+    }
   }
 
   private static Duration normalizeLease(Duration lease) {

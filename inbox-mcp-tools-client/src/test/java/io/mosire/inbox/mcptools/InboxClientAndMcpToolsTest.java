@@ -50,8 +50,8 @@ class InboxClientAndMcpToolsTest {
           bootstrap.push(
               "app-a",
               InboxModels.PushItem.builder("ticket")
-                  .title("from client")
-                  .payload(Map.of("body", "CLIENT_BODY"))
+                  .summary("from client")
+                  .content(Map.of("body", "CLIENT_BODY"))
                   .build());
       assertThat(pushed.itemId()).startsWith("itm_");
       assertThat(bootstrap.list("app-a", Set.of(), 10).count()).isEqualTo(1);
@@ -59,7 +59,7 @@ class InboxClientAndMcpToolsTest {
           bootstrap.claim(
               "app-a", List.of(pushed.itemId()), Duration.ofSeconds(60));
       assertThat(claimed.claimed()).hasSize(1);
-      assertThat(claimed.claimed().getFirst().payload()).isNotNull();
+      assertThat(claimed.claimed().getFirst().content()).isNotNull();
       String claimToken = claimed.claimed().getFirst().claimToken();
       InboxModels.CompleteResult completed =
           bootstrap.complete(
@@ -150,6 +150,13 @@ class InboxClientAndMcpToolsTest {
                 "inbox_release",
                 "inbox_renew",
                 "inbox_push",
+                "inbox_view",
+                "inbox_update",
+                "inbox_append",
+                "inbox_delete",
+                "inbox_occupancy",
+                "inbox_occupy",
+                "inbox_vacate",
                 "inbox_credential_info");
 
         McpSchema.CallToolResult pushed =
@@ -158,8 +165,8 @@ class InboxClientAndMcpToolsTest {
                     "inbox_push",
                     Map.of(
                         "channel", "ticket",
-                        "title", "program mcp",
-                        "payload", Map.of("body", "MCP_BODY"))));
+                        "summary", "program mcp",
+                        "content", Map.of("body", "MCP_BODY"))));
         assertThat(pushed.isError()).isFalse();
         JsonNode pushJson = JSON.readTree(wireText(pushed));
         String itemId = pushJson.get("itemId").asText();
@@ -176,7 +183,9 @@ class InboxClientAndMcpToolsTest {
                     Map.of("itemIds", List.of(itemId), "leaseSeconds", 60)));
         JsonNode claimJson = JSON.readTree(wireText(claimed));
         String claimToken = claimJson.get("claimed").get(0).get("claimToken").asText();
-        assertThat(claimJson.get("claimed").get(0).get("payload").get("body").asText())
+        assertThat(claimJson.get("claimed").get(0).get("summary").asText())
+            .isEqualTo("program mcp");
+        assertThat(claimJson.get("claimed").get(0).get("content").get("body").asText())
             .isEqualTo("MCP_BODY");
 
         McpSchema.CallToolResult completed =
@@ -220,10 +229,10 @@ class InboxClientAndMcpToolsTest {
       bootstrap.ensureInbox("app-a");
       InboxModels.PushResult ticket =
           bootstrap.push(
-              "app-a", InboxModels.PushItem.builder("ticket").title("ticket").build());
+              "app-a", InboxModels.PushItem.builder("ticket").summary("ticket").build());
       InboxModels.PushResult tweet =
           bootstrap.push(
-              "app-a", InboxModels.PushItem.builder("tweet").title("tweet").build());
+              "app-a", InboxModels.PushItem.builder("tweet").summary("tweet").build());
 
       String scopedToken =
           daemon
@@ -247,6 +256,70 @@ class InboxClientAndMcpToolsTest {
       assertThat(result.claimed()).isEmpty();
       assertThat(result.rejected()).singleElement().extracting(InboxModels.Rejection::code)
           .isEqualTo("ITEM_UNAVAILABLE");
+    }
+  }
+
+
+  @Test
+  void clientCanViewUpdateAppendAndDeleteAvailableItems() throws Exception {
+    try (InboxDaemon daemon = daemon()) {
+      URI base = URI.create("http://127.0.0.1:" + daemon.apiPort());
+      InboxClient client = client(daemon, base, provisionerToken(daemon, "app-a", false));
+      client.ensureInbox("app-a");
+
+      InboxModels.PushResult pushed =
+          client.push(
+              "app-a",
+              InboxModels.PushItem.builder("ticket")
+                  .summary("initial summary")
+                  .content(Map.of("body", "initial content"))
+                  .build());
+      InboxModels.ItemDetail viewed = client.view("app-a", pushed.itemId());
+      assertThat(viewed.summary()).isEqualTo("initial summary");
+      assertThat(String.valueOf(viewed.content())).contains("initial content");
+
+      InboxModels.ItemMutation updated =
+          client.update(
+              "app-a",
+              pushed.itemId(),
+              new InboxModels.UpdateItem(
+                  "updated summary", "updated content", null, null, 42, null));
+      assertThat(updated.deleted()).isFalse();
+      InboxModels.ItemDetail updatedView = client.view("app-a", pushed.itemId());
+      assertThat(updatedView.summary()).isEqualTo("updated summary");
+      assertThat(updatedView.content()).isEqualTo("updated content");
+      assertThat(updatedView.priority()).isEqualTo(42);
+
+      client.append(
+          "app-a",
+          pushed.itemId(),
+          new InboxModels.AppendItem(" appended", "final summary", 50, null));
+      InboxModels.ItemDetail appended = client.view("app-a", pushed.itemId());
+      assertThat(appended.summary()).isEqualTo("final summary");
+      assertThat(appended.content()).isEqualTo("updated content\n appended");
+      assertThat(appended.priority()).isEqualTo(50);
+
+      InboxModels.ItemMutation deleted = client.deleteItem("app-a", pushed.itemId(), null);
+      assertThat(deleted.deleted()).isTrue();
+      assertThatThrownBy(() -> client.view("app-a", pushed.itemId()))
+          .isInstanceOf(InboxClientException.class)
+          .extracting(error -> ((InboxClientException) error).statusCode())
+          .isEqualTo(404);
+
+      InboxModels.PushResult claimedTarget =
+          client.push(
+              "app-a",
+              InboxModels.PushItem.builder("ticket").summary("claimed").build());
+      client.claim("app-a", List.of(claimedTarget.itemId()), Duration.ofSeconds(60));
+      assertThatThrownBy(
+              () ->
+                  client.update(
+                      "app-a",
+                      claimedTarget.itemId(),
+                      new InboxModels.UpdateItem("nope", null, null, null, null, null)))
+          .isInstanceOf(InboxClientException.class)
+          .extracting(error -> ((InboxClientException) error).statusCode())
+          .isEqualTo(409);
     }
   }
 
