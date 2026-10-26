@@ -173,7 +173,7 @@ Accept: application/json
 itemId
 channel
 kind
-title
+summary   // legacy fallback: title
 ```
 
 模板：
@@ -183,8 +183,8 @@ title
 inbox={inboxId} revision={revision} available={available} channels=[{changedChannels}]
 
 摘要（最多 {N} 条；可能已变化，claim 时以通知板为准）:
-- {"itemId":"itm_...","channel":"ticket","kind":"reply","title":"..."}
-- {"itemId":"itm_...","channel":"tweet-review","kind":"review","title":"..."}
+- {"itemId":"itm_...","channel":"ticket","kind":"reply","summary":"..."}
+- {"itemId":"itm_...","channel":"tweet-review","kind":"review","summary":"..."}
 - 还有 {remaining} 条未展示
 
 请直接通过你的程序 MCP 调用 inbox_claim 选择本回合要处理的 itemId；
@@ -194,13 +194,14 @@ inbox={inboxId} revision={revision} available={available} channels=[{changedChan
 
 要求：
 
-- `N` 默认 3；标题最多 80 字符；总摘要建议不超过 600 字符；
-- title 是不可信文本，必须去掉换行/控制字符并做 JSON 字符串转义；
+- `N` 默认 3；summary 最多 80 字符；总摘要建议不超过 600 字符；
+- summary 是不可信文本，必须去掉换行/控制字符并做 JSON 字符串转义；
 - 不拼接 payload、payloadRef、claim token、API token；
 - 摘要请求失败时，**降级为无摘要唤醒**，不能因为摘要失败而不唤醒；
 - 摘要只作提示，claim 结果才是权威内容；
 - 同一 revision 仍然只唤醒一次；
-- adapter 仍然不 claim、不 complete、不 push。
+- adapter 仍然不 claim、不 complete、不 push；
+- `summary` 优先，缺失时才 fallback 到 legacy `title`。
 
 不得把 payload/payloadRef/claim token/API token 拼入唤醒消息。
 
@@ -208,7 +209,8 @@ inbox={inboxId} revision={revision} available={available} channels=[{changedChan
 
 - `PUT /v1/inboxes/{inbox}`：幂等 ensure inbox。
 - `GET /v1/inboxes/{inbox}/status`：adapter 真相读取。
-- `GET /v1/inboxes/{inbox}/items?limit=3`：adapter 摘要读取，需要 `items:read`。
+- `GET /v1/inboxes/{inbox}/items?limit=3`：adapter 摘要读取，需要 `items:read`；新 item 使用 `summary` 字段，`title` 是兼容 alias。
+- `GET /v1/inboxes/{inbox}/items/{itemId}`：Agent 可通过程序 MCP 的 `inbox_view` 读取完整 content；DSH adapter 不需要调用。
 - `GET /v1/inboxes/{inbox}/events`：SSE，支持 Last-Event-ID。
 - `GET/PUT/DELETE /v1/inboxes/{inbox}/occupancy`：advisory 占用标记。
 - Program MCP 通过 `inbox-client-java` 负责 list/claim/complete/push。
@@ -271,7 +273,7 @@ systemctl --user start inboxd-live.service
 8. daemon/DSH 重启后两个 binding 各自恢复。
 9. tokenRef 不可读/非绝对路径 -> fail closed，不唤醒。
 10. 日志、adapter state、wake message、session transcript 不含 raw token。
-11. wake 摘要最多 3 条，含 itemId/channel/kind/title，不包含 payload；超出部分显示剩余数量。
+11. wake 摘要最多 3 条，含 itemId/channel/kind/summary，不包含 content；超出部分显示剩余数量。
 12. 摘要请求失败时仍投递无摘要唤醒，不阻塞处理。
 13. 旧 wake token（无 `items:read`）不能用于摘要验收；重新 issueBinding 后 `/items` 返回 200。
 14. Mode A 下目标会话通过程序自己的 MCP 完成 claim/complete，DSH adapter 不调用任何 claim/complete 接口。

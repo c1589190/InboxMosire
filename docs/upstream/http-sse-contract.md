@@ -440,3 +440,91 @@ Authorization: Bearer <inbox-occupy-token>
 - occupancy 变化不推进 revision、不产生 SSE 事件；
 - DSH adapter 在 bind 成功后 PUT occupancy，在 unbind/session-stop 后 DELETE occupancy；
 - 其他调用方不会因为 occupied=true 被服务端拒绝；是否尊重占用由调用方/上层策略决定。
+
+---
+
+# v1.3 增补：通用 Summary / Content Item
+
+通知条目只有两个由核心解释的人类字段：
+
+```text
+summary : 短文本，用于列表、wake 摘要和选择
+content : 不透明内容，程序/用户可写文本、Markdown、JSON 字符串等
+```
+
+核心不会解析 `content`，也不会把它当成链接或工具调用。`title/payload/payloadRef` 保留为兼容别名。
+
+## Item 视图
+
+```http
+GET /v1/inboxes/{inbox}/items/{itemId}
+Authorization: Bearer <items:read-token>
+```
+
+```json
+{
+  "itemId": "itm_...",
+  "inbox": "app-a",
+  "channel": "ticket",
+  "kind": "reply",
+  "summary": "工单更新",
+  "title": "工单更新",
+  "content": "客户补充了附件\n...",
+  "contentRef": null,
+  "priority": 10,
+  "status": "available",
+  "attempts": 0,
+  "revision": 3,
+  "createdAt": "...",
+  "updatedAt": "..."
+}
+```
+
+- `items:read` 可读；
+- 不 claim；
+- content 只在 view/claim 返回，不出现在 `/items` 列表或 SSE/wake。
+
+## 修改 / 追加 / 删除
+
+```http
+PATCH /v1/inboxes/{inbox}/items/{itemId}
+POST  /v1/inboxes/{inbox}/items/{itemId}/append
+DELETE /v1/inboxes/{inbox}/items/{itemId}
+```
+
+需要 `items:manage`。
+
+PATCH：
+
+```json
+{
+  "summary": "新的摘要",
+  "content": "新的完整内容",
+  "priority": 100,
+  "expectedRevision": 3
+}
+```
+
+APPEND：
+
+```json
+{
+  "content": "追加的一段内容",
+  "summary": "可选新摘要",
+  "priority": 100,
+  "expectedRevision": 3
+}
+```
+
+- append 默认在旧 content 后加换行；
+- `expectedRevision` 不匹配返回 409；
+- 只允许修改 `available` item；
+- `claimed` item 返回 409 `CONFLICT`，避免 Agent 正在处理时被静默改写；
+- DELETE 是归档，不是物理删除；返回 `deleted=true`；
+- 修改/追加/删除推进 revision 并写 event，DSH 下一次摘要唤醒会看到新状态。
+
+## 兼容字段
+
+- `title` 继续作为 `summary` 的 legacy alias 返回；
+- `payload`/`payloadRef` 继续被接受为 `content`/`contentRef` 的旧输入别名；
+- 新客户端和 MCP 工具应使用 `summary/content/contentRef`。

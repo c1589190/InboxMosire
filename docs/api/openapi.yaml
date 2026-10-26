@@ -610,6 +610,137 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+  /v1/inboxes/{inbox}/items/{itemId}:
+    get:
+      tags:
+      - Producer
+      operationId: viewItem
+      summary: View one item summary and full opaque content.
+      description: Requires `items:read`. Does not claim the item and does not interpret content as a tool action.
+      parameters:
+      - $ref: '#/components/parameters/Inbox'
+      - $ref: '#/components/parameters/ItemId'
+      responses:
+        '200':
+          description: Item detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags:
+      - Producer
+      operationId: updateItem
+      summary: Replace mutable item fields.
+      description: Requires `items:manage`. Only available items may be updated; claimed items return 409 CONFLICT.
+      parameters:
+      - $ref: '#/components/parameters/Inbox'
+      - $ref: '#/components/parameters/ItemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateItemRequest'
+      responses:
+        '200':
+          description: Mutation result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemMutationResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Item is claimed or revision mismatch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+    delete:
+      tags:
+      - Producer
+      operationId: deleteItem
+      summary: Archive/delete an available item.
+      description: Requires `items:manage`. Claimed items return 409 CONFLICT; use complete for claimed work.
+      parameters:
+      - $ref: '#/components/parameters/Inbox'
+      - $ref: '#/components/parameters/ItemId'
+      - name: expectedRevision
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      responses:
+        '200':
+          description: Mutation result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemMutationResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Item is claimed or revision mismatch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/inboxes/{inbox}/items/{itemId}/append:
+    post:
+      tags:
+      - Producer
+      operationId: appendItem
+      summary: Append opaque content to an available item.
+      description: Requires `items:manage`. Appends a newline then the supplied content; optional summary/priority updates.
+      parameters:
+      - $ref: '#/components/parameters/Inbox'
+      - $ref: '#/components/parameters/ItemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppendItemRequest'
+      responses:
+        '200':
+          description: Mutation result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemMutationResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Item is claimed or revision mismatch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
 components:
   securitySchemes:
     bearerAuth:
@@ -629,6 +760,12 @@ components:
         pattern: ^[A-Za-z0-9._-]{1,64}$
     CredentialId:
       name: credentialId
+      in: path
+      required: true
+      schema:
+        type: string
+    ItemId:
+      name: itemId
       in: path
       required: true
       schema:
@@ -670,6 +807,7 @@ components:
       additionalProperties: false
       required:
       - channel
+      - summary
       properties:
         channel:
           type: string
@@ -678,19 +816,33 @@ components:
           type: string
           pattern: ^[A-Za-z0-9._-]{1,64}$
           default: notification
-        title:
-          type:
-          - string
-          - 'null'
+        summary:
+          type: string
           maxLength: 512
-          description: Optional human label. Present in inbox_list, but never in SSE or wake messages.
-        payload:
-          description: Opaque item content. Returned only to the Agent after MCP claim.
-        payloadRef:
+          description: Short summary used by inbox_list, wake summary, and selection.
+        content:
+          description: Opaque full content. Returned only by inbox_view or inbox_claim. May be text, Markdown, or serialized
+            JSON.
+        contentRef:
           type:
           - string
           - 'null'
           maxLength: 2048
+          description: Optional external content reference.
+        title:
+          type:
+          - string
+          - 'null'
+          deprecated: true
+          description: Legacy alias for summary.
+        payload:
+          deprecated: true
+          description: Legacy alias for content.
+        payloadRef:
+          type:
+          - string
+          - 'null'
+          deprecated: true
         dedupeKey:
           type:
           - string
@@ -874,6 +1026,7 @@ components:
       - itemId
       - channel
       - kind
+      - summary
       - priority
       - attempts
       - createdAt
@@ -884,10 +1037,14 @@ components:
           type: string
         kind:
           type: string
+        summary:
+          type: string
         title:
           type:
           - string
           - 'null'
+          deprecated: true
+          description: Legacy alias for summary.
         priority:
           type: integer
         attempts:
@@ -1211,3 +1368,136 @@ components:
           - string
           - 'null'
           maxLength: 200
+    ItemDetail:
+      type: object
+      required:
+      - itemId
+      - inbox
+      - channel
+      - kind
+      - summary
+      - content
+      - priority
+      - status
+      - revision
+      - createdAt
+      - updatedAt
+      properties:
+        itemId:
+          type: string
+        inbox:
+          type: string
+        channel:
+          type: string
+        kind:
+          type: string
+        summary:
+          type: string
+        title:
+          type:
+          - string
+          - 'null'
+          deprecated: true
+        content:
+          description: Opaque full content.
+        contentRef:
+          type:
+          - string
+          - 'null'
+        priority:
+          type: integer
+        status:
+          type: string
+          enum:
+          - available
+          - claimed
+        attempts:
+          type: integer
+        revision:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    UpdateItemRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        summary:
+          type:
+          - string
+          - 'null'
+          maxLength: 512
+        content:
+          description: New opaque content.
+        contentRef:
+          type:
+          - string
+          - 'null'
+          maxLength: 2048
+        kind:
+          type:
+          - string
+          - 'null'
+        priority:
+          type:
+          - integer
+          - 'null'
+          minimum: -1000
+          maximum: 1000
+        expectedRevision:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+          format: int64
+    AppendItemRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - content
+      properties:
+        content:
+          description: Opaque content to append.
+        summary:
+          type:
+          - string
+          - 'null'
+          maxLength: 512
+        priority:
+          type:
+          - integer
+          - 'null'
+          minimum: -1000
+          maximum: 1000
+        expectedRevision:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+          format: int64
+    ItemMutationResult:
+      type: object
+      required:
+      - itemId
+      - revision
+      - available
+      - updatedAt
+      - deleted
+      properties:
+        itemId:
+          type: string
+        revision:
+          type: integer
+          format: int64
+        available:
+          type: integer
+          format: int64
+        updatedAt:
+          type: string
+          format: date-time
+        deleted:
+          type: boolean

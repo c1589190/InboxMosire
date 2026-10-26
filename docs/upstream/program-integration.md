@@ -251,3 +251,77 @@ session-S2 -> app-b
 4. DSH adapter 只读取 tokenRef 对应文件，必须拒绝 non-absolute/不可读文件。
 5. channel-scoped token 不能在 items list/claim 中越过 channel 范围。
 6. 所有 API 默认只绑 `127.0.0.1`。
+
+---
+
+# v1.3：通用 Item 与程序自有 MCP 工具
+
+每条通知现在只有：
+
+```text
+summary : 短摘要，列表和 wake 摘要使用
+content : 不透明完整内容，程序/用户自定义
+```
+
+程序 MCP 工具增加：
+
+```text
+inbox_view
+inbox_update
+inbox_append
+inbox_delete
+```
+
+完整工具（15 个）：
+
+```text
+inbox_status
+inbox_list
+inbox_view
+inbox_update
+inbox_append
+inbox_delete
+inbox_claim
+inbox_renew
+inbox_complete
+inbox_release
+inbox_push
+inbox_occupancy
+inbox_occupy
+inbox_vacate
+inbox_credential_info
+```
+
+push 示例：
+
+```java
+client.push("app-a", InboxModels.PushItem.builder("ticket")
+    .summary("工单更新")
+    .content(Map.of("ticketId", "t-42", "body", "完整正文"))
+    .dedupeKey("ticket:t-42")
+    .priority(10)
+    .build());
+```
+
+view/update/append/delete：
+
+```java
+InboxModels.ItemDetail detail = client.view("app-a", itemId);
+client.update("app-a", itemId,
+    new InboxModels.UpdateItem("新的摘要", "新的内容", null, null, 100, null));
+client.append("app-a", itemId,
+    new InboxModels.AppendItem("追加内容", null, null, null));
+client.deleteItem("app-a", itemId, null);
+```
+
+边界：
+
+- update/append/delete 只允许 available item；
+- claimed item 返回 409，避免处理中被静默改写；
+- 修改推进 revision 并触发事件；下一次 DSH 摘要会更新；
+- `content` 不由 InboxMosire 解释，不会自动变成工具调用或链接。
+
+兼容：
+
+- `title/payload/payloadRef` 仍作为输入/输出别名；
+- 新程序应使用 `summary/content/contentRef`。

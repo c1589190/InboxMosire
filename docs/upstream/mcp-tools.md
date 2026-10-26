@@ -297,3 +297,85 @@ registry.registerAll(new InboxClientMcpTools(programClient, "app-a").all());
 - claim token 仍会出现在 claim 结果中，因为它是 Agent 处理对应 item 的能力凭证。
 
 目标会话在 Mode A 下只调用程序自有 MCP；DSH adapter 只负责 SSE + wake。
+
+---
+
+# v1.3 增补：通用 Item、Summary/Content 与修改工具
+
+每个 item 的核心人类可读字段：
+
+```text
+summary : 短摘要
+content : 不透明完整内容（文本/Markdown/JSON 字符串均可）
+```
+
+`inbox_list` 只返回 summary；`inbox_view` 返回 summary + content；`inbox_claim` 进入处理中并返回 content。`payload/title/payloadRef` 是旧兼容别名。
+
+## 新增中心 MCP 工具
+
+| 工具 | 作用 | 需要 |
+|---|---|---|
+| `inbox_view` | 查看单条 summary + content，不 claim | items:read |
+| `inbox_update` | 替换 summary/content/contentRef/kind/priority | items:manage |
+| `inbox_append` | 追加 content 文本，可选更新 summary/priority | items:manage |
+| `inbox_delete` | 归档/删除 available item | items:manage |
+
+### `inbox_view`
+
+```json
+{"inbox":"main","itemId":"itm_..."}
+```
+
+返回 item 完整视图，content 是程序/用户自定义的不透明内容。
+
+### `inbox_update`
+
+```json
+{
+  "inbox":"main",
+  "itemId":"itm_...",
+  "summary":"新的摘要",
+  "content":"新的完整内容",
+  "priority":100,
+  "expectedRevision":3
+}
+```
+
+只允许 available item；claimed item 返回 `CONFLICT`。
+
+### `inbox_append`
+
+```json
+{
+  "inbox":"main",
+  "itemId":"itm_...",
+  "content":"追加的一段内容",
+  "summary":"可选新摘要",
+  "priority":100,
+  "expectedRevision":3
+}
+```
+
+append 使用换行连接旧 content。结构化内容需要程序自己序列化。
+
+### `inbox_delete`
+
+```json
+{"inbox":"main","itemId":"itm_...","expectedRevision":3}
+```
+
+归档为 done，返回 `deleted=true`；不会物理删除审计记录。
+
+## 当前工具数量
+
+- 中心后端 MCP：11 个（原 7 个 + view/update/append/delete）
+- 程序自有 `inbox-mcp-tools-client`：15 个（中心 11 个 + occupancy 3 个 + credential_info 1 个）
+
+## 兼容和边界
+
+- `inbox_push` 接受 `summary/content`，也接受旧 `title/payload`。
+- `inbox_list` 返回 `summary`，并保留 `title` 兼容字段。
+- `inbox_claim` 返回 `summary/content`；旧 `payload` 字段不再保证。
+- update/append/delete 只允许 `available` item；claimed item 返回 409。
+- 修改会推进 revision 并产生 event，下一次 wake 摘要会更新。
+- content 不会被核心解释为链接或自动工具调用。

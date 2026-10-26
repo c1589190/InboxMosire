@@ -112,3 +112,21 @@ InboxModels.IssuedCredentialView mcpToken = inbox.client().issueCredential(
 - 调用方必须 `close()`，否则 server/SQLite/sweeper 会随进程继续占用资源；
 - `close()` 后端口释放；
 - 默认临时目录被删除，显式 `dataDir` 根据 `deleteDataOnClose` 决定。
+
+## v1.3 item 约定
+
+Embedded server 使用同一套通用 item：
+
+```text
+summary : 短摘要
+content : 不透明完整内容
+```
+
+程序可以通过 `server.client()` 调用：
+
+- `push`（summary/content）
+- `view`（summary + content）
+- `update` / `append` / `deleteItem`
+- `claim` / `complete` 等处理状态
+
+修改/追加/删除只允许 `available` item；claimed item 返回 409。修改会推进 revision，下一次 DSH 唤醒摘要会使用最新 summary。

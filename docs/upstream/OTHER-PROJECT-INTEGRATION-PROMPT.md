@@ -192,3 +192,23 @@ occupancy 只是 advisory 标记，**不是访问锁**；访问边界仍是 toke
 - `/home/cna/InboxMosire/docs/upstream/mcp-tools.md`
 
 如果上面任何依赖、API 或宿主能力当前不可用，报告 `BLOCKED`，不要用直接写 SQLite、明文 token 或绕过 API 的方式临时实现。
+
+---
+
+## v1.3 更新：summary/content 与修改工具
+
+- 程序 push item 使用：
+
+```text
+summary : 短摘要
+content : 不透明完整内容（文本/Markdown/JSON 字符串均可）
+```
+
+- 程序自有 MCP 现在有 15 个工具，新增：
+  - `inbox_view`：读 summary + content，不 claim；
+  - `inbox_update`：修改 summary/content/contentRef/kind/priority；
+  - `inbox_append`：追加 content 文本；
+  - `inbox_delete`：归档 available item。
+- update/append/delete 仅允许 available item；claimed 返回 409 CONFLICT。
+- content 由程序自己决定格式，InboxMosire 不解析、不自动执行。
+- 旧 `title/payload/payloadRef` 仍兼容，但新代码使用 `summary/content/contentRef`。
