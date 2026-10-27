@@ -4,7 +4,7 @@
 - 分支：`main`
 - 版本：`0.1.0-SNAPSHOT`
 - 阶段：通用 item、409 冲突错误、DSH view-ack 与 session 级休息已实现；Bot 侧后续映射/参数待做
-- 最近 Inbox 功能提交：`489e1d3 feat(mcp): 增加标准 inbox_rest 休息工具`
+- 最近 Inbox 功能提交：`6013cde feat(embedded): 参数化 host/port/path 与 claim sweeper`
 - 最近 Inbox 契约提交：`2c4b1c2 docs(errors): 发布 item 冲突 code/details 契约`
 - 最近 DSH 提交：`113a838 feat(rest): 以标准 inbox_rest 工具设置休息`
 
@@ -74,6 +74,14 @@
   - `DELETE /v1/inboxes/{inbox}/items/{itemId}`
   - 新增 `items:manage` 保护的修改面；
   - `items:read` 可 view，不返回 content 到列表/SSE/wake。
+- Embedded 参数化初始化：
+  - `EmbeddedInboxOptions` 新增 `apiHost/apiPort/mcpHost/mcpPort/mcpPath/claimSweepInterval`；
+  - `start(options)` 全量透传 `ServerConfig`，`0` 端口仍是随机；
+  - `apiUrl()/mcpUrl()/client()` 使用实际 host、bound port、路径；
+  - 固定端口绑定失败 fail-closed；
+  - `InboxDaemon.start(config, claimSweepInterval)` 可配置 sweeper，旧 `start(config)` 保持 5s；
+  - `serverConfig()/claimSweepInterval()/apiPort()/mcpPort()` 诊断 accessor；
+  - loopback-only、端口、path、正 Duration 校验已补齐。
 - Advisory inbox occupancy：
   - `GET/PUT/DELETE /v1/inboxes/{inbox}/occupancy`
   - scope `inbox:occupy`
@@ -96,8 +104,9 @@
 结果：
 
 - `BUILD SUCCESS`
-- Tests run: **31**，Failures 0, Errors 0, Skipped 0
+- Tests run: **37**，Failures 0, Errors 0, Skipped 0
 - Checkstyle：7 个模块全部 0 violations
+- `inbox-embedded` 8 个测试，覆盖随机/固定端口、自定义 path、fail-closed、accessor、数据保留
 - `inbox-client`、`inbox-mcp-tools-client`、`inbox-embedded` 已安装到 `~/.m2`
 - 测试覆盖：
   - Client view/update/append/delete；
@@ -106,7 +115,7 @@
   - 程序自有 MCP 15 工具注册；
   - legacy `title/payload` HTTP 输入兼容；
   - 原有 claim/complete/SSE/token/occupancy 用例保持通过。
-- 本次验证使用临时 SQLite + 真实进程内 HTTP/MCP daemon；另有一个外部手动 daemon 正在 18765/18766 运行。
+- `scripts/gate.sh full` 通过；本次验证使用临时 SQLite + 真实进程内 HTTP/MCP daemon；另有一个外部手动 daemon 正在 18765/18766 运行。
 - 本次未重跑真实 DSH host/ACP 场景；下一步是配置真实 DSH connector（scope/URL/Bearer）并跑一次 view-ack wake 验收。
 
 ## DSH 对接状态

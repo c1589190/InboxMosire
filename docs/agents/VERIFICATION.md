@@ -94,3 +94,19 @@ scripts/gate.sh full
 - Bot 不需要改 `bot_thread_ack` schema 才能使用休息；只需更新 `inbox-mcp-tools-client` 依赖/重建并让 Agent 调 `inbox_rest`。
 - Inbox：31 tests，0 failures/errors/skipped；7 个模块 Checkstyle 0。
 - DSH：124 tests，121 pass、0 fail、3 live real-backend skip。
+
+
+## v1.9 验证补充（2026-10-27）
+
+- `scripts/gate.sh full`：通过；7 个模块 Checkstyle 0。
+- `./mvnw -B -ntp clean install`：通过；37 tests，0 failures/errors/skipped。
+- `inbox-embedded` 8 个测试覆盖：
+  - 默认 start 随机端口 + `/mcp` + main inbox；
+  - 自定义 `mcpPath` 与 heartbeat/claimSweepInterval accessor；
+  - 固定 API/MCP 端口及关闭后端口释放；
+  - 固定端口冲突 fail-closed；
+  - 非回环 host、非法端口、空/带 query/fragment path、非正 Duration 拒绝；
+  - 显式 `deleteDataOnClose(false)` 保留数据库；
+  - 旧 `start()` / `start(String)` 兼容。
+- `InboxDaemon` 实际日志显示配置 sweeper（默认 `sweeper=5s`）。
+- artifact 已安装到 `~/.m2/repository/io/mosire/inbox-embedded/0.1.0-SNAPSHOT`。
