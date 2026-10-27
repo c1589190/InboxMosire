@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Comparator;
 import java.util.Objects;
 import java.util.Set;
@@ -46,6 +47,8 @@ public final class EmbeddedInboxServer implements AutoCloseable {
           ApiScopes.EVENTS_READ);
 
   private final InboxDaemon daemon;
+  private final ServerConfig serverConfig;
+  private final Duration claimSweepInterval;
   private final Path dataDir;
   private final boolean deleteDataOnClose;
   private final String inboxId;
@@ -55,11 +58,15 @@ public final class EmbeddedInboxServer implements AutoCloseable {
 
   private EmbeddedInboxServer(
       InboxDaemon daemon,
+      ServerConfig serverConfig,
+      Duration claimSweepInterval,
       Path dataDir,
       boolean deleteDataOnClose,
       String inboxId,
       String provisionerToken) {
     this.daemon = daemon;
+    this.serverConfig = serverConfig;
+    this.claimSweepInterval = claimSweepInterval;
     this.dataDir = dataDir;
     this.deleteDataOnClose = deleteDataOnClose;
     this.inboxId = inboxId;
@@ -97,16 +104,16 @@ public final class EmbeddedInboxServer implements AutoCloseable {
     ServerConfig config =
         new ServerConfig(
             effectiveDataDir,
-            "127.0.0.1",
-            0,
-            "127.0.0.1",
-            0,
-            "/mcp",
+            options.apiHost(),
+            options.apiPort(),
+            options.mcpHost(),
+            options.mcpPort(),
+            options.mcpPath(),
             options.heartbeat(),
             options.inboxId());
     InboxDaemon daemon = null;
     try {
-      daemon = InboxDaemon.start(config);
+      daemon = InboxDaemon.start(config, options.claimSweepInterval());
       IssuedCredential issued =
           daemon
               .database()
@@ -118,15 +125,21 @@ public final class EmbeddedInboxServer implements AutoCloseable {
                   Set.of(),
                   null,
                   "inbox-embedded");
-      String apiUrl =
-          "http://" + config.apiHost() + ":" + daemon.apiPort() + "/v1";
+      String apiUrl = apiUrlString(config, daemon.apiPort());
+      String mcpUrl = mcpUrlString(config, daemon.mcpPort());
       LOG.info(
           "Embedded InboxMosire 已启动 api={} mcp={} inbox={}",
           apiUrl,
-          "http://" + config.mcpHost() + ":" + daemon.mcpPort() + config.mcpPath(),
+          mcpUrl,
           options.inboxId());
       return new EmbeddedInboxServer(
-          daemon, effectiveDataDir, deleteOnClose, options.inboxId(), issued.token());
+          daemon,
+          config,
+          options.claimSweepInterval(),
+          effectiveDataDir,
+          deleteOnClose,
+          options.inboxId(),
+          issued.token());
     } catch (IOException | RuntimeException e) {
       if (daemon != null) {
         daemon.close();
@@ -140,11 +153,28 @@ public final class EmbeddedInboxServer implements AutoCloseable {
 
   /** 调用方 InboxClient 的 base URL，不含 /v1。 */
   public URI apiUrl() {
-    return URI.create("http://127.0.0.1:" + daemon.apiPort());
+    return URI.create(apiUrlString());
   }
 
+  /** 实际配置的 MCP URL，使用配置 host、实际 bound port 和 mcpPath。 */
   public URI mcpUrl() {
-    return URI.create("http://127.0.0.1:" + daemon.mcpPort() + "/mcp");
+    return URI.create(mcpUrlString(serverConfig, daemon.mcpPort()));
+  }
+
+  public ServerConfig serverConfig() {
+    return serverConfig;
+  }
+
+  public Duration claimSweepInterval() {
+    return claimSweepInterval;
+  }
+
+  public int apiPort() {
+    return daemon.apiPort();
+  }
+
+  public int mcpPort() {
+    return daemon.mcpPort();
   }
 
   public String inboxId() {
@@ -166,7 +196,19 @@ public final class EmbeddedInboxServer implements AutoCloseable {
   }
 
   private String apiUrlString() {
-    return "http://127.0.0.1:" + daemon.apiPort();
+    return apiUrlString(serverConfig, daemon.apiPort());
+  }
+
+  private static String apiUrlString(ServerConfig config, int boundPort) {
+    return "http://" + urlHost(config.apiHost()) + ":" + boundPort;
+  }
+
+  private static String mcpUrlString(ServerConfig config, int boundPort) {
+    return apiUrlString(config, boundPort) + config.mcpPath();
+  }
+
+  private static String urlHost(String host) {
+    return host.indexOf(':') >= 0 && !host.startsWith("[") ? "[" + host + "]" : host;
   }
 
   @Override

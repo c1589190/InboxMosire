@@ -43,6 +43,9 @@ public record ServerConfig(
     if (mcpPath == null || !mcpPath.startsWith("/")) {
       throw new IllegalArgumentException("mcpPath 必须以 / 开头");
     }
+    if (mcpPath.indexOf('?') >= 0 || mcpPath.indexOf('#') >= 0) {
+      throw new IllegalArgumentException("mcpPath 不能包含 query 或 fragment");
+    }
     if (sseHeartbeat == null || sseHeartbeat.isNegative() || sseHeartbeat.isZero()) {
       throw new IllegalArgumentException("heartbeat 必须为正");
     }

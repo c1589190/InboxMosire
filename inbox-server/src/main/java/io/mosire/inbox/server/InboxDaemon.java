@@ -5,6 +5,7 @@ import io.mosire.inbox.sqlite.SqliteDatabase;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -22,6 +23,7 @@ public final class InboxDaemon implements AutoCloseable {
   private final InboxHttpServer httpServer;
   private final InboxMcpServer mcpServer;
   private final ScheduledExecutorService sweeper;
+  private final Duration claimSweepInterval;
   private volatile boolean closed;
 
   private InboxDaemon(
@@ -31,7 +33,8 @@ public final class InboxDaemon implements AutoCloseable {
       SseNotifier notifier,
       InboxHttpServer httpServer,
       InboxMcpServer mcpServer,
-      ScheduledExecutorService sweeper) {
+      ScheduledExecutorService sweeper,
+      Duration claimSweepInterval) {
     this.config = config;
     this.database = database;
     this.service = service;
@@ -39,9 +42,29 @@ public final class InboxDaemon implements AutoCloseable {
     this.httpServer = httpServer;
     this.mcpServer = mcpServer;
     this.sweeper = sweeper;
+    this.claimSweepInterval = claimSweepInterval;
   }
 
   public static InboxDaemon start(ServerConfig config) throws IOException {
+    return start(config, Duration.ofSeconds(5));
+  }
+
+  /**
+   * Start the daemon with an explicit claim-sweeper initial delay and period.
+   *
+   * @param config server configuration
+   * @param claimSweepInterval positive sweeper interval
+   * @return running daemon
+   * @throws IOException if a listener cannot bind or the database cannot open
+   */
+  public static InboxDaemon start(ServerConfig config, Duration claimSweepInterval)
+      throws IOException {
+    if (claimSweepInterval == null
+        || claimSweepInterval.isNegative()
+        || claimSweepInterval.isZero()) {
+      throw new IllegalArgumentException("claimSweepInterval 必须为正");
+    }
+    long sweepMillis = Math.max(1L, claimSweepInterval.toMillis());
     SqliteDatabase database = SqliteDatabase.open(databasePath(config));
     try {
       SseNotifier notifier = new SseNotifier();
@@ -86,23 +109,30 @@ public final class InboxDaemon implements AutoCloseable {
               LOG.error("claim sweeper 失败", e);
             }
           },
-          5,
-          5,
-          TimeUnit.SECONDS);
+          sweepMillis,
+          sweepMillis,
+          TimeUnit.MILLISECONDS);
       service.sweepExpired();
       LOG.info(
-          "InboxMosire 已启动 data={} api=http://{}:{}/v1 mcp=http://{}:{}{} sweeper=5s",
+          "InboxMosire 已启动 data={} api=http://{}:{}/v1 mcp=http://{}:{}{} sweeper={}",
           databasePath(config),
           config.apiHost(),
           http.boundPort(),
           config.mcpHost(),
           mcp.boundPort(),
-          config.mcpPath());
-      return new InboxDaemon(config, database, service, notifier, http, mcp, sweeper);
+          config.mcpPath(),
+          durationLabel(claimSweepInterval));
+      return new InboxDaemon(
+          config, database, service, notifier, http, mcp, sweeper, claimSweepInterval);
     } catch (IOException | RuntimeException e) {
       database.close();
       throw e;
     }
+  }
+
+  private static String durationLabel(Duration duration) {
+    long millis = duration.toMillis();
+    return millis % 1000 == 0 ? (millis / 1000) + "s" : millis + "ms";
   }
 
   public static Path databasePath(ServerConfig config) {
@@ -119,6 +149,10 @@ public final class InboxDaemon implements AutoCloseable {
 
   public ServerConfig config() {
     return config;
+  }
+
+  public Duration claimSweepInterval() {
+    return claimSweepInterval;
   }
 
   public InboxService service() {

@@ -43,13 +43,19 @@ try (EmbeddedInboxServer inbox = EmbeddedInboxServer.start()) {
 }
 ```
 
-## 自定义 data dir
+## 参数化启动
 
 ```java
 EmbeddedInboxOptions options = EmbeddedInboxOptions.builder()
     .dataDir(Path.of("/var/lib/my-program/inbox"))
     .inboxId("app-a")
+    .apiHost("127.0.0.1")
+    .apiPort(0)
+    .mcpHost("127.0.0.1")
+    .mcpPort(0)
+    .mcpPath("/mcp")
     .heartbeat(Duration.ofSeconds(15))
+    .claimSweepInterval(Duration.ofSeconds(5))
     .deleteDataOnClose(false)
     .build();
 
@@ -60,15 +66,39 @@ try (EmbeddedInboxServer inbox = EmbeddedInboxServer.start(options)) {
 
 显式给 `dataDir` 时默认不删除；只要临时目录时默认随 `close()` 删除。
 
+### 字段和默认值
+
+| Builder | 默认值 | 含义 |
+|---|---|---|
+| `dataDir(Path)` | 独立临时目录 | SQLite 数据目录 |
+| `inboxId(String)` | `main` | 默认并自动创建的 inbox |
+| `apiHost(String)` | `127.0.0.1` | API host，仅回环 |
+| `apiPort(int)` | `0` | 0 表示随机可用端口 |
+| `mcpHost(String)` | `127.0.0.1` | MCP host，仅回环 |
+| `mcpPort(int)` | `0` | 0 表示随机可用端口 |
+| `mcpPath(String)` | `/mcp` | 必须以 `/` 开头，不含 query/fragment |
+| `heartbeat(Duration)` | 15 秒 | SSE heartbeat，必须为正 |
+| `claimSweepInterval(Duration)` | 5 秒 | claim sweeper 初始延迟/周期，必须为正 |
+| `deleteDataOnClose(boolean)` | 临时目录 true；显式目录 false | 关闭时删除数据目录 |
+
+- 固定端口绑定失败会直接启动失败，绝不静默退回随机端口；
+- 自定义 `mcpPath("/custom/mcp")` 时 `mcpUrl()` 返回实际 host、bound port 和 path；
+- `apiUrl()` / `mcpUrl()` 使用实际配置 host 和实际 bound port；
+- `serverConfig()`、`claimSweepInterval()`、`apiPort()`、`mcpPort()` 可用于诊断，不包含 token。
+
 ## 拿到什么
 
 ```text
-apiUrl()            http://127.0.0.1:<random>
-mcpUrl()            http://127.0.0.1:<random>/mcp
+apiUrl()            http://<apiHost>:<actual-api-port>
+mcpUrl()            http://<mcpHost>:<actual-mcp-port><mcpPath>
 inboxId()           app-a
 provisionerToken()  一次返回的 exact-bound provisioner token
-client()            已配置 apiUrl + token 的 InboxClient
+client()            已配置实际 apiUrl + token 的 InboxClient
 dataDir()           当前实例数据目录
+serverConfig()      有效请求配置（不含 token）
+claimSweepInterval() 实际 sweeper 周期
+apiPort()           实际 bound API port
+mcpPort()           实际 bound MCP port
 ```
 
 token scopes：
@@ -100,9 +130,10 @@ InboxModels.IssuedCredentialView mcpToken = inbox.client().issueCredential(
 
 ## 当前网络边界
 
-`inbox-embedded` 只绑 `127.0.0.1`：
+`inbox-embedded` 的 `apiHost/mcpHost` 仍只允许回环地址：
 
 - 同机其他进程可以连接返回的 `apiUrl()` / `mcpUrl()`；
+- `0.0.0.0`、公网地址等非回环 host 会在 builder 阶段被拒绝；
 - 跨机器远程连接仍需要远程绑定、TLS 和网络访问控制，当前未开放。
 
 ## 生命周期
