@@ -129,6 +129,85 @@ class InboxHttpServerTest {
   }
 
   @Test
+  void sourceRoundTripsThroughPushListViewControllerAndClaimAndIsOptional() throws Exception {
+    String source = "qq_group/bot-1/955432692";
+    HttpResponse<String> sourced =
+        client.send(
+            pushRequest(
+                "{\"channel\":\"ticket\",\"kind\":\"reply\",\"summary\":\"sourced\","
+                    + "\"content\":{\"body\":\"x\"},\"source\":\"" + source + "\"}"),
+            HttpResponse.BodyHandlers.ofString());
+    assertThat(sourced.statusCode()).isEqualTo(201);
+    String sourcedId = InboxJson.MAPPER.readTree(sourced.body()).get("itemId").asText();
+
+    HttpResponse<String> legacy =
+        client.send(
+            pushRequest(
+                "{\"channel\":\"ticket\",\"kind\":\"reply\",\"title\":\"legacy\"}"),
+            HttpResponse.BodyHandlers.ofString());
+    assertThat(legacy.statusCode()).isEqualTo(201);
+    String legacyId = InboxJson.MAPPER.readTree(legacy.body()).get("itemId").asText();
+
+    String readerToken =
+        daemon
+            .database()
+            .credentials()
+            .issue(
+                "source-reader",
+                Set.of(ApiScopes.ITEMS_READ, ApiScopes.ITEMS_MANAGE),
+                "main",
+                Set.of())
+            .token();
+
+    HttpResponse<String> listed =
+        client.send(
+            HttpRequest.newBuilder(URI.create(apiBase + "/items"))
+                .header("Authorization", "Bearer " + readerToken)
+                .GET()
+                .build(),
+            HttpResponse.BodyHandlers.ofString());
+    assertThat(listed.statusCode()).isEqualTo(200);
+    JsonNode list = InboxJson.MAPPER.readTree(listed.body());
+    assertThat(itemById(list, sourcedId).get("source").asText()).isEqualTo(source);
+    assertThat(itemById(list, legacyId).get("source").isNull()).isTrue();
+
+    HttpResponse<String> sourcedView =
+        client.send(
+            HttpRequest.newBuilder(URI.create(apiBase + "/items/" + sourcedId))
+                .header("Authorization", "Bearer " + readerToken)
+                .GET()
+                .build(),
+            HttpResponse.BodyHandlers.ofString());
+    assertThat(InboxJson.MAPPER.readTree(sourcedView.body()).get("source").asText())
+        .isEqualTo(source);
+
+    HttpResponse<String> legacyView =
+        client.send(
+            HttpRequest.newBuilder(URI.create(apiBase + "/items/" + legacyId))
+                .header("Authorization", "Bearer " + readerToken)
+                .GET()
+                .build(),
+            HttpResponse.BodyHandlers.ofString());
+    assertThat(InboxJson.MAPPER.readTree(legacyView.body()).get("source").isNull()).isTrue();
+
+    HttpResponse<String> claimed =
+        client.send(
+            HttpRequest.newBuilder(URI.create(apiBase + "/claims"))
+                .header("Authorization", "Bearer " + readerToken)
+                .header("Content-Type", "application/json")
+                .POST(
+                    HttpRequest.BodyPublishers.ofString(
+                        "{\"itemIds\":[\"" + sourcedId + "\",\"" + legacyId
+                            + "\"],\"leaseSeconds\":60}"))
+                .build(),
+            HttpResponse.BodyHandlers.ofString());
+    assertThat(claimed.statusCode()).isEqualTo(200);
+    JsonNode claim = InboxJson.MAPPER.readTree(claimed.body());
+    assertThat(claim.get("claimed").get(0).get("source").asText()).isEqualTo(source);
+    assertThat(claim.get("claimed").get(1).get("source").isNull()).isTrue();
+  }
+
+  @Test
   void sseStreamsCloudEventsWithoutPayloadAndReplaysFromLastEventId() throws Exception {
     HttpRequest streamRequest =
         HttpRequest.newBuilder(URI.create(apiBase + "/events"))
@@ -141,17 +220,22 @@ class InboxHttpServerTest {
     assertThat(stream.statusCode()).isEqualTo(200);
 
     CompletableFuture<String> firstFrame = CompletableFuture.supplyAsync(() -> readFrame(stream.body()));
+    String source = "qq_group/bot-1/955432692";
     HttpResponse<String> pushed =
         client.send(
             pushRequest(
                 "{\"channel\":\"ticket\",\"kind\":\"reply\",\"title\":\"ticket\","
-                    + "\"payload\":{\"secret\":\"TOP_SECRET_BODY\"}}"),
+                    + "\"payload\":{\"secret\":\"TOP_SECRET_BODY\"},"
+                    + "\"source\":\"" + source + "\"}"),
             HttpResponse.BodyHandlers.ofString());
     assertThat(pushed.statusCode()).isEqualTo(201);
 
     String frame = firstFrame.get(5, TimeUnit.SECONDS);
     assertThat(frame).contains("event: inbox.changed").contains("data: ");
-    assertThat(frame).doesNotContain("TOP_SECRET_BODY").doesNotContain("\"title\"");
+    assertThat(frame)
+        .doesNotContain("TOP_SECRET_BODY")
+        .doesNotContain("\"title\"")
+        .doesNotContain(source);
     JsonNode event = eventFromFrame(frame);
     assertThat(event.get("specversion").asText()).isEqualTo("1.0");
     assertThat(event.get("type").asText()).isEqualTo(CloudEvents.TYPE);
@@ -249,6 +333,15 @@ class InboxHttpServerTest {
     assertThat(event.get("data").get("channels").has("ticket")).isTrue();
     assertThat(event.get("data").get("channels").has("tweet")).isFalse();
     assertThat(frame).doesNotContain("hidden");
+  }
+
+  private static JsonNode itemById(JsonNode list, String itemId) {
+    for (JsonNode item : list.get("items")) {
+      if (itemId.equals(item.get("itemId").asText())) {
+        return item;
+      }
+    }
+    throw new AssertionError("item not found: " + itemId);
   }
 
   private HttpRequest pushRequest(String body) {

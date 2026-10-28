@@ -153,7 +153,8 @@ public final class InboxClient {
         detail.attempts(),
         detail.revision(),
         detail.createdAt(),
-        detail.updatedAt());
+        detail.updatedAt(),
+        detail.source());
   }
 
   public InboxModels.ItemMutation update(
@@ -209,7 +210,8 @@ public final class InboxClient {
               item.contentRef(),
               item.priority(),
               item.claimToken(),
-              item.claimExpiresAt()));
+              item.claimExpiresAt(),
+              item.source()));
     }
     return new InboxModels.ClaimResult(
         result.revision(), result.available(), List.copyOf(claimed), result.rejected());

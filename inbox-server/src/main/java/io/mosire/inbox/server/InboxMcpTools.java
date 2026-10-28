@@ -132,16 +132,17 @@ public final class InboxMcpTools {
           List<ItemSummary> items = service.listAvailable(inbox, channels, limit);
           List<Map<String, Object>> serialized = new ArrayList<>();
           for (ItemSummary item : items) {
-            serialized.add(
-                Map.of(
-                    "itemId", item.itemId(),
-                    "channel", item.channel(),
-                    "kind", item.kind(),
-                    "summary", item.summary() == null ? "" : item.summary(),
-                    "title", item.summary() == null ? "" : item.summary(),
-                    "priority", item.priority(),
-                    "attempts", item.attempts(),
-                    "createdAt", item.createdAt().toString()));
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("itemId", item.itemId());
+            entry.put("channel", item.channel());
+            entry.put("kind", item.kind());
+            entry.put("summary", item.summary() == null ? "" : item.summary());
+            entry.put("title", item.summary() == null ? "" : item.summary());
+            entry.put("priority", item.priority());
+            entry.put("attempts", item.attempts());
+            entry.put("createdAt", item.createdAt().toString());
+            entry.put("source", item.source());
+            serialized.add(entry);
           }
           return Map.of("inbox", inbox, "items", serialized, "count", serialized.size());
         });
@@ -413,6 +414,7 @@ public final class InboxMcpTools {
       entry.put("claimToken", item.claimToken());
       entry.put("claimExpiresAt", item.claimExpiresAt().toString());
       entry.put("content", parseContent(item.content()));
+      entry.put("source", item.source());
       if (item.contentRef() != null) {
         entry.put("contentRef", item.contentRef());
       }
@@ -469,6 +471,7 @@ public final class InboxMcpTools {
     result.put("revision", item.revision());
     result.put("createdAt", item.createdAt().toString());
     result.put("updatedAt", item.updatedAt().toString());
+    result.put("source", item.source());
     return result;
   }
 
@@ -517,6 +520,11 @@ public final class InboxMcpTools {
     props.put("payloadRef", McpToolSupport.prop("string", "Deprecated alias for contentRef."));
     props.put("dedupeKey", McpToolSupport.prop("string", "Deduplication key."));
     props.put("priority", McpToolSupport.prop("integer", "-1000..1000."));
+    props.put(
+        "source",
+        McpToolSupport.prop(
+            "string",
+            "Optional opaque provenance address (for example qq_group/bot-1/955432692); max 512 single-line chars."));
     return props;
   }
 

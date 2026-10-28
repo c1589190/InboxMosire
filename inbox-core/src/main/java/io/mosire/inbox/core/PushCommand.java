@@ -12,4 +12,29 @@ public record PushCommand(
     String contentRef,
     String dedupeKey,
     int priority,
-    Instant availableAt) {}
+    Instant availableAt,
+    String source) {
+  /** 兼容旧调用方；source 为 null。 */
+  public PushCommand(
+      String inboxId,
+      String channel,
+      String kind,
+      String summary,
+      String content,
+      String contentRef,
+      String dedupeKey,
+      int priority,
+      Instant availableAt) {
+    this(
+        inboxId,
+        channel,
+        kind,
+        summary,
+        content,
+        contentRef,
+        dedupeKey,
+        priority,
+        availableAt,
+        null);
+  }
+}

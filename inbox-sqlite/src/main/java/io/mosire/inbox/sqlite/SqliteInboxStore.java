@@ -104,6 +104,7 @@ public final class SqliteInboxStore implements InboxStore {
             title           TEXT,
             payload         TEXT,
             payload_ref     TEXT,
+            source          TEXT,
             dedupe_key      TEXT,
             priority        INTEGER NOT NULL DEFAULT 0,
             status          TEXT NOT NULL,
@@ -167,6 +168,7 @@ public final class SqliteInboxStore implements InboxStore {
       ensureColumn(st, "inbox", "occupied_by", "TEXT");
       ensureColumn(st, "inbox", "occupied_at", "TEXT");
       ensureColumn(st, "inbox", "occupancy_updated_at", "TEXT");
+      ensureColumn(st, "inbox_item", "source", "TEXT");
       exec(
           st,
           "INSERT OR IGNORE INTO schema_migration(version, applied_at) VALUES (1, '"
@@ -257,9 +259,10 @@ public final class SqliteInboxStore implements InboxStore {
               connection.prepareStatement(
                   """
                   INSERT INTO inbox_item
-                    (id, inbox_id, channel, kind, title, payload, payload_ref, dedupe_key,
-                     priority, status, attempts, revision, created_at, updated_at, available_at)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', 0, ?, ?, ?, ?)
+                    (id, inbox_id, channel, kind, title, payload, payload_ref, source,
+                     dedupe_key, priority, status, attempts, revision, created_at, updated_at,
+                     available_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', 0, ?, ?, ?, ?)
                   """)) {
             ps.setString(1, itemId);
             ps.setString(2, command.inboxId());
@@ -268,14 +271,15 @@ public final class SqliteInboxStore implements InboxStore {
             ps.setString(5, command.summary());
             ps.setString(6, command.content());
             ps.setString(7, command.contentRef());
-            ps.setString(8, command.dedupeKey());
-            ps.setInt(9, command.priority());
-            ps.setLong(10, revision);
+            ps.setString(8, command.source());
+            ps.setString(9, command.dedupeKey());
+            ps.setInt(10, command.priority());
+            ps.setLong(11, revision);
             String created = now.toString();
-            ps.setString(11, created);
             ps.setString(12, created);
+            ps.setString(13, created);
             Instant availableAt = command.availableAt() == null ? now : command.availableAt();
-            ps.setString(13, availableAt.toString());
+            ps.setString(14, availableAt.toString());
             ps.executeUpdate();
           }
           recordEventLocked(
@@ -385,7 +389,7 @@ public final class SqliteInboxStore implements InboxStore {
       requireInboxLocked(inboxId);
       String sql =
           """
-          SELECT id, channel, kind, title, priority, attempts, created_at
+          SELECT id, channel, kind, title, priority, attempts, created_at, source
           FROM inbox_item
           WHERE inbox_id = ? AND status = 'available' AND available_at <= ?
           """
@@ -408,7 +412,8 @@ public final class SqliteInboxStore implements InboxStore {
                     rs.getString("title"),
                     rs.getInt("priority"),
                     rs.getInt("attempts"),
-                    Instant.parse(rs.getString("created_at"))));
+                    Instant.parse(rs.getString("created_at")),
+                    rs.getString("source")));
           }
         }
         return List.copyOf(out);
@@ -556,7 +561,7 @@ public final class SqliteInboxStore implements InboxStore {
     try (PreparedStatement ps =
         connection.prepareStatement(
             """
-            SELECT id, inbox_id, channel, kind, title, payload, payload_ref, priority,
+            SELECT id, inbox_id, channel, kind, title, payload, payload_ref, source, priority,
                    status, attempts, revision, created_at, updated_at
             FROM inbox_item
             WHERE id = ? AND inbox_id = ?
@@ -575,6 +580,7 @@ public final class SqliteInboxStore implements InboxStore {
             rs.getString("title"),
             rs.getString("payload"),
             rs.getString("payload_ref"),
+            rs.getString("source"),
             rs.getInt("priority"),
             ItemStatus.fromWire(rs.getString("status")),
             rs.getInt("attempts"),
@@ -647,8 +653,8 @@ public final class SqliteInboxStore implements InboxStore {
             try (PreparedStatement ps =
                 connection.prepareStatement(
                     """
-                    SELECT id, channel, kind, title, payload, payload_ref, priority, status,
-                           available_at
+                    SELECT id, channel, kind, title, payload, payload_ref, source, priority,
+                           status, available_at
                     FROM inbox_item WHERE id = ? AND inbox_id = ?
                     """)) {
               ps.setString(1, itemId);
@@ -717,7 +723,8 @@ public final class SqliteInboxStore implements InboxStore {
                         rs.getString("payload_ref"),
                         rs.getInt("priority"),
                         claimToken,
-                        expiresAt));
+                        expiresAt,
+                        rs.getString("source")));
                 changedChannels.add(rs.getString("channel"));
               }
             }
@@ -1357,6 +1364,7 @@ public final class SqliteInboxStore implements InboxStore {
       String summary,
       String content,
       String contentRef,
+      String source,
       int priority,
       ItemStatus status,
       int attempts,
@@ -1377,7 +1385,8 @@ public final class SqliteInboxStore implements InboxStore {
           attempts,
           revision,
           createdAt,
-          updatedAt);
+          updatedAt,
+          source);
     }
   }
 

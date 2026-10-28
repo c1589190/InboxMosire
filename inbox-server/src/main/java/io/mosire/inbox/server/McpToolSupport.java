@@ -121,7 +121,8 @@ final class McpToolSupport {
             contentRef,
             optionalString(args, "dedupeKey"),
             intValue(args, "priority", 0),
-            null));
+            null,
+            optionalString(args, "source")));
   }
 
   static String contentValue(Object value) {

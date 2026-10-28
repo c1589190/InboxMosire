@@ -8,6 +8,16 @@
 - 最近 Inbox 契约提交：`2c4b1c2 docs(errors): 发布 item 冲突 code/details 契约`
 - 最近 DSH 提交：`113a838 feat(rest): 以标准 inbox_rest 工具设置休息`
 
+## 2026-10-28 P8 item source
+
+- 通用 Inbox item 新增可选 `source` 字段（单行、≤512、拒绝控制字符；不解释为指令）。
+- `PushCommand`/`ItemSummary`/`ItemDetail`/`ClaimedItem` 均透传；HTTP、中心 MCP、
+  程序自有 MCP 与 `InboxClient` 同步支持；旧无 source 调用保持 null。
+- `inbox_item.source TEXT` 通过既有 `ensureColumn` 幂等迁移；list/view/claim 均返回。
+- 验证：`./mvnw -B -ntp clean verify` PASS，**41 tests / 0 failures / 0 errors / 0 skipped**；
+  `./scripts/gate.sh full` PASS；SSE 不携带 source，source 不进入日志。
+- 真实 daemon/DSH/iiBot 外部联调：`NOT_RUN`。
+
 ## 2026-10-28 依赖刷新
 
 - AgentLib 固定 `0.2.4`（源码最新；公开 Pages 仍为 0.2.3，发布落差记录在 iiBot 计划）。

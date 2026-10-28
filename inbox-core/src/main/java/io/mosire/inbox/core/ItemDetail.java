@@ -16,4 +16,37 @@ public record ItemDetail(
     int attempts,
     long revision,
     Instant createdAt,
-    Instant updatedAt) {}
+    Instant updatedAt,
+    String source) {
+  /** 兼容旧调用方；source 为 null。 */
+  public ItemDetail(
+      String itemId,
+      String inboxId,
+      String channel,
+      String kind,
+      String summary,
+      String content,
+      String contentRef,
+      int priority,
+      ItemStatus status,
+      int attempts,
+      long revision,
+      Instant createdAt,
+      Instant updatedAt) {
+    this(
+        itemId,
+        inboxId,
+        channel,
+        kind,
+        summary,
+        content,
+        contentRef,
+        priority,
+        status,
+        attempts,
+        revision,
+        createdAt,
+        updatedAt,
+        null);
+  }
+}

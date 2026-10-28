@@ -12,6 +12,9 @@ import io.mosire.inbox.core.PushCommand;
 import io.mosire.inbox.core.PushResult;
 import io.mosire.inbox.core.ReleaseResult;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -49,6 +52,109 @@ class SqliteInboxStoreTest {
       assertThat(store.eventsAfter("main", 0, 10)).hasSize(1);
       assertThat(store.eventsAfter("main", 0, 10).getFirst().changedChannels())
           .containsExactly("ticket");
+    }
+  }
+
+  @Test
+  void sourceRoundTripsThroughListViewModelAndClaim() {
+    try (SqliteDatabase db = SqliteDatabase.open(temp.resolve("inbox.db"))) {
+      var store = db.inboxStore();
+      Instant now = Instant.parse("2026-10-25T00:00:00Z");
+      String source = "qq_group/bot-1/955432692";
+      String itemId =
+          store
+              .push(
+                  new PushCommand(
+                      "main", "ticket", "reply", "标题", "payload", null, null, 0, now, source),
+                  now)
+              .itemId();
+
+      assertThat(store.listAvailable("main", Set.of(), 10, now))
+          .singleElement()
+          .extracting(item -> item.source())
+          .isEqualTo(source);
+      assertThat(store.viewItem("main", itemId, Set.of()).source()).isEqualTo(source);
+      ClaimResult claim = store.claim("main", List.of(itemId), Duration.ofSeconds(60), now);
+      assertThat(claim.claimed()).singleElement().extracting(item -> item.source()).isEqualTo(source);
+    }
+  }
+
+  @Test
+  void noSourceStaysNullAndLegacySchemaIsMigratedOnReopen() throws Exception {
+    Path dbFile = temp.resolve("legacy.db");
+    try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + dbFile);
+        Statement statement = connection.createStatement()) {
+      statement.execute(
+          """
+          CREATE TABLE inbox (
+            id         TEXT PRIMARY KEY,
+            revision   INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          )
+          """);
+      statement.execute(
+          """
+          CREATE TABLE inbox_item (
+            id              TEXT PRIMARY KEY,
+            inbox_id        TEXT NOT NULL REFERENCES inbox(id) ON DELETE CASCADE,
+            channel         TEXT NOT NULL,
+            kind            TEXT NOT NULL,
+            title           TEXT,
+            payload         TEXT,
+            payload_ref     TEXT,
+            dedupe_key      TEXT,
+            priority        INTEGER NOT NULL DEFAULT 0,
+            status          TEXT NOT NULL,
+            attempts        INTEGER NOT NULL DEFAULT 0,
+            revision        INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT NOT NULL,
+            updated_at      TEXT NOT NULL,
+            available_at    TEXT NOT NULL,
+            claimed_at      TEXT,
+            completed_at    TEXT,
+            outcome         TEXT,
+            outcome_summary TEXT
+          )
+          """);
+    }
+
+    Instant now = Instant.parse("2026-10-25T00:00:00Z");
+    String itemId;
+    try (SqliteDatabase db = SqliteDatabase.open(dbFile)) {
+      itemId =
+          db.inboxStore()
+              .push(
+                  new PushCommand(
+                      "main", "ops", "alert", "title", "payload", null, null, 0, now),
+                  now)
+              .itemId();
+      assertThat(db.inboxStore().viewItem("main", itemId, Set.of()).source()).isNull();
+    }
+
+    try (SqliteDatabase db = SqliteDatabase.open(dbFile)) {
+      assertThat(db.inboxStore().viewItem("main", itemId, Set.of()).source()).isNull();
+      var store = db.inboxStore();
+      String source = "app_system/runtime/started";
+      String sourcedId =
+          store
+              .push(
+                  new PushCommand(
+                      "main", "ops", "alert", "title2", "payload2", null, null, 0, now, source),
+                  now)
+              .itemId();
+      assertThat(store.viewItem("main", sourcedId, Set.of()).source()).isEqualTo(source);
+    }
+
+    try (SqliteDatabase db = SqliteDatabase.open(dbFile)) {
+      assertThat(db.inboxStore().viewItem("main", itemId, Set.of()).source()).isNull();
+      assertThat(
+              db.inboxStore().listAvailable("main", Set.of(), 10, now).stream()
+                  .filter(item -> "title2".equals(item.summary()))
+                  .findFirst()
+                  .orElseThrow()
+                  .source())
+          .isEqualTo("app_system/runtime/started");
     }
   }
 

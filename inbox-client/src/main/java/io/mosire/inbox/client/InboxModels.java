@@ -37,7 +37,20 @@ public final class InboxModels {
       String summary,
       int priority,
       int attempts,
-      String createdAt) {
+      String createdAt,
+      String source) {
+    /** 兼容旧调用方；source 为 null。 */
+    public ItemSummary(
+        String itemId,
+        String channel,
+        String kind,
+        String summary,
+        int priority,
+        int attempts,
+        String createdAt) {
+      this(itemId, channel, kind, summary, priority, attempts, createdAt, null);
+    }
+
     @Deprecated
     public String title() {
       return summary;
@@ -53,7 +66,20 @@ public final class InboxModels {
       Object content,
       String contentRef,
       String dedupeKey,
-      int priority) {
+      int priority,
+      String source) {
+    /** 兼容旧调用方；source 为 null。 */
+    public PushItem(
+        String channel,
+        String kind,
+        String summary,
+        Object content,
+        String contentRef,
+        String dedupeKey,
+        int priority) {
+      this(channel, kind, summary, content, contentRef, dedupeKey, priority, null);
+    }
+
     public static Builder builder(String channel) {
       return new Builder(channel);
     }
@@ -66,6 +92,7 @@ public final class InboxModels {
       private String contentRef;
       private String dedupeKey;
       private int priority;
+      private String source;
 
       private Builder(String channel) {
         this.channel = channel;
@@ -122,8 +149,14 @@ public final class InboxModels {
         return this;
       }
 
+      public Builder source(String value) {
+        this.source = value;
+        return this;
+      }
+
       public PushItem build() {
-        return new PushItem(channel, kind, summary, content, contentRef, dedupeKey, priority);
+        return new PushItem(
+            channel, kind, summary, content, contentRef, dedupeKey, priority, source);
       }
     }
   }
@@ -139,7 +172,32 @@ public final class InboxModels {
       String contentRef,
       int priority,
       String claimToken,
-      String claimExpiresAt) {
+      String claimExpiresAt,
+      String source) {
+    /** 兼容旧调用方；source 为 null。 */
+    public ClaimedItem(
+        String itemId,
+        String channel,
+        String kind,
+        String summary,
+        Object content,
+        String contentRef,
+        int priority,
+        String claimToken,
+        String claimExpiresAt) {
+      this(
+          itemId,
+          channel,
+          kind,
+          summary,
+          content,
+          contentRef,
+          priority,
+          claimToken,
+          claimExpiresAt,
+          null);
+    }
+
     @Deprecated
     public String title() {
       return summary;
@@ -169,7 +227,40 @@ public final class InboxModels {
       int attempts,
       long revision,
       String createdAt,
-      String updatedAt) {}
+      String updatedAt,
+      String source) {
+    /** 兼容旧调用方；source 为 null。 */
+    public ItemDetail(
+        String itemId,
+        String inbox,
+        String channel,
+        String kind,
+        String summary,
+        Object content,
+        String contentRef,
+        int priority,
+        String status,
+        int attempts,
+        long revision,
+        String createdAt,
+        String updatedAt) {
+      this(
+          itemId,
+          inbox,
+          channel,
+          kind,
+          summary,
+          content,
+          contentRef,
+          priority,
+          status,
+          attempts,
+          revision,
+          createdAt,
+          updatedAt,
+          null);
+    }
+  }
 
   public record UpdateItem(
       String summary,

@@ -28,11 +28,60 @@ class InboxServiceTest {
 
     assertThat(result.itemId()).isEqualTo("itm-1");
     assertThat(store.lastPush.availableAt()).isEqualTo(NOW);
+    assertThat(store.lastPush.source()).isNull();
     assertThat(signals).hasValue(1);
 
     store.pushResult = new PushResult("itm-1", true, 1, NOW);
     service.push(new PushCommand("main", "ticket", "reply", "t", "p", null, "k", 0, null));
     assertThat(signals).hasValue(1);
+  }
+
+  @Test
+  void sourceIsValidatedNormalizedAndPassedToStore() {
+    store.pushResult = new PushResult("itm-1", false, 1, NOW);
+    service.push(
+        new PushCommand(
+            "main",
+            "ticket",
+            "reply",
+            "t",
+            "p",
+            null,
+            "k",
+            0,
+            null,
+            "qq_group/bot-1/955432692"));
+
+    assertThat(store.lastPush.source()).isEqualTo("qq_group/bot-1/955432692");
+    assertThat(store.pushCalls).isEqualTo(1);
+
+    service.push(new PushCommand("main", "ticket", "reply", "t", "p", null, null, 0, null, "  "));
+    assertThat(store.lastPush.source()).isNull();
+
+    assertThatThrownBy(
+            () ->
+                service.push(
+                    new PushCommand(
+                        "main", "ticket", "reply", "t", "p", null, null, 0, null, "a\nb")))
+        .isInstanceOf(InboxException.class)
+        .hasMessageContaining("source");
+    assertThatThrownBy(
+            () ->
+                service.push(
+                    new PushCommand(
+                        "main",
+                        "ticket",
+                        "reply",
+                        "t",
+                        "p",
+                        null,
+                        null,
+                        0,
+                        null,
+                        "s".repeat(513))))
+        .isInstanceOf(InboxException.class)
+        .hasMessageContaining("512");
+    assertThat(store.pushCalls).isEqualTo(2);
   }
 
   @Test

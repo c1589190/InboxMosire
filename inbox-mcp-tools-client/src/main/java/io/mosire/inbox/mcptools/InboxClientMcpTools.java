@@ -306,7 +306,8 @@ public final class InboxClientMcpTools {
                   .content(contentValue(content))
                   .contentRef(contentRef)
                   .dedupeKey(optionalString(args, "dedupeKey"))
-                  .priority(intValue(args, "priority", 0));
+                  .priority(intValue(args, "priority", 0))
+                  .source(optionalString(args, "source"));
           return client.push(inbox(args), builder.build());
         });
   }
@@ -493,6 +494,11 @@ public final class InboxClientMcpTools {
     props.put("payloadRef", prop("string", "Deprecated alias for contentRef."));
     props.put("dedupeKey", prop("string", "Deduplication key."));
     props.put("priority", prop("integer", "-1000..1000."));
+    props.put(
+        "source",
+        prop(
+            "string",
+            "Optional opaque provenance address (for example qq_group/bot-1/955432692); max 512 single-line chars."));
     return props;
   }
 

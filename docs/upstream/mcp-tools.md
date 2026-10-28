@@ -96,6 +96,8 @@
       "channel": "ticket",
       "kind": "reply",
       "title": "工单更新",
+      "summary": "工单更新",
+      "source": "qq_group/bot-1/955432692",
       "priority": 0,
       "attempts": 0,
       "createdAt": "2026-10-25T00:00:00Z"
@@ -136,7 +138,8 @@
       "priority": 0,
       "claimToken": "clm_...",
       "claimExpiresAt": "2026-10-25T00:05:00Z",
-      "payload": {"ticketId": "t-42"}
+      "payload": {"ticketId": "t-42"},
+      "source": "qq_group/bot-1/955432692"
     }
   ],
   "rejected": [
@@ -232,7 +235,8 @@ Agent 可以给自己或别的消费者压任务：
   "title": "稍后检查工单 t-42",
   "payload": {"ticketId": "t-42"},
   "dedupeKey": "self:t-42:check",
-  "priority": 10
+  "priority": 10,
+  "source": "qq_group/bot-1/955432692"
 }
 ```
 
@@ -327,7 +331,7 @@ content : 不透明完整内容（文本/Markdown/JSON 字符串均可）
 {"inbox":"main","itemId":"itm_..."}
 ```
 
-返回 item 完整视图，content 是程序/用户自定义的不透明内容。
+返回 item 完整视图，content 是程序/用户自定义的不透明内容；如 item 有来源，同时返回 `source`。
 
 ### `inbox_update`
 
@@ -438,3 +442,26 @@ adapter 在成功完成后设置 session 级休息。`0` 表示清除休息，�
 - 不修改任何 item，不需要 claim；
 - 返回 `scope=adapter-session`；
 - 由当前 session 的宿主 adapter 解释；其他 binding 不受影响。
+
+
+---
+
+# v1.8 增补：可选 `source` 来源地址（P8.2）
+
+`inbox_push` 接受可选 `source`。它是 producer/DSH 传入的不透明来源地址，例如：
+
+```text
+qq_group/bot-1/955432692
+app_system/runtime/started
+```
+
+契约：
+
+- `source` 可选；缺失、`null` 或空白保存为 `null`；
+- 最大 512 字符，必须是非空单行文本；拒绝 ISO 控制字符与 Unicode 行分隔符；
+- Inbox 不校验 QQ 语法，也不解释为工具调用、链接或模板；
+- `source` 不得包含 token/secret；调用方负责最小化，DSH 等宿主负责面向 UI/模型的最终安全投影；
+- `inbox_list`、`inbox_view`、`inbox_claim` 返回同一 `source`；SSE 事件不包含 item source；
+- 旧 JSON/MCP 请求没有 `source` 时行为不变。中心 `InboxMcpTools` 与程序自有
+  `InboxClientMcpTools` 的 `inbox_push` schema 均包含该可选字段；旧构造器/旧 builder
+  调用保持兼容。

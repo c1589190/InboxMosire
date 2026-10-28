@@ -47,20 +47,29 @@ class InboxClientAndMcpToolsTest {
       assertThat(ensured.created()).isTrue();
       assertThat(bootstrap.ensureInbox("app-a").created()).isFalse();
 
+      String source = "qq_group/bot-1/955432692";
       InboxModels.PushResult pushed =
           bootstrap.push(
               "app-a",
               InboxModels.PushItem.builder("ticket")
                   .summary("from client")
                   .content(Map.of("body", "CLIENT_BODY"))
+                  .source(source)
                   .build());
       assertThat(pushed.itemId()).startsWith("itm_");
-      assertThat(bootstrap.list("app-a", Set.of(), 10).count()).isEqualTo(1);
+      InboxModels.ItemList listed = bootstrap.list("app-a", Set.of(), 10);
+      assertThat(listed.count()).isEqualTo(1);
+      assertThat(listed.items()).singleElement()
+          .extracting(InboxModels.ItemSummary::source)
+          .isEqualTo(source);
+      InboxModels.ItemDetail viewed = bootstrap.view("app-a", pushed.itemId());
+      assertThat(viewed.source()).isEqualTo(source);
       InboxModels.ClaimResult claimed =
           bootstrap.claim(
               "app-a", List.of(pushed.itemId()), Duration.ofSeconds(60));
       assertThat(claimed.claimed()).hasSize(1);
       assertThat(claimed.claimed().getFirst().content()).isNotNull();
+      assertThat(claimed.claimed().getFirst().source()).isEqualTo(source);
       String claimToken = claimed.claimed().getFirst().claimToken();
       InboxModels.CompleteResult completed =
           bootstrap.complete(
@@ -168,7 +177,8 @@ class InboxClientAndMcpToolsTest {
                     Map.of(
                         "channel", "ticket",
                         "summary", "program mcp",
-                        "content", Map.of("body", "MCP_BODY"))));
+                        "content", Map.of("body", "MCP_BODY"),
+                        "source", "app_system/runtime/started")));
         assertThat(pushed.isError()).isFalse();
         JsonNode pushJson = JSON.readTree(wireText(pushed));
         String itemId = pushJson.get("itemId").asText();
@@ -176,7 +186,17 @@ class InboxClientAndMcpToolsTest {
         McpSchema.CallToolResult listed =
             mcp.callTool(new McpSchema.CallToolRequest("inbox_list", Map.of()));
         assertThat(listed.isError()).as(wireText(listed)).isFalse();
-        assertThat(JSON.readTree(wireText(listed)).get("count").asInt()).isEqualTo(1);
+        JsonNode listJson = JSON.readTree(wireText(listed));
+        assertThat(listJson.get("count").asInt()).isEqualTo(1);
+        assertThat(listJson.get("items").get(0).get("source").asText())
+            .isEqualTo("app_system/runtime/started");
+
+        McpSchema.CallToolResult viewed =
+            mcp.callTool(
+                new McpSchema.CallToolRequest("inbox_view", Map.of("itemId", itemId)));
+        assertThat(viewed.isError()).as(wireText(viewed)).isFalse();
+        assertThat(JSON.readTree(wireText(viewed)).get("source").asText())
+            .isEqualTo("app_system/runtime/started");
 
         McpSchema.CallToolResult claimed =
             mcp.callTool(
@@ -189,6 +209,8 @@ class InboxClientAndMcpToolsTest {
             .isEqualTo("program mcp");
         assertThat(claimJson.get("claimed").get(0).get("content").get("body").asText())
             .isEqualTo("MCP_BODY");
+        assertThat(claimJson.get("claimed").get(0).get("source").asText())
+            .isEqualTo("app_system/runtime/started");
 
         McpSchema.CallToolResult completed =
             mcp.callTool(

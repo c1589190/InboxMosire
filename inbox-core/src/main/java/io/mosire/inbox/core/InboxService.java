@@ -18,6 +18,7 @@ public final class InboxService {
   private static final int MAX_PAYLOAD = 256 * 1024;
   private static final int MAX_REF = 2048;
   private static final int MAX_DEDUPE = 256;
+  private static final int MAX_SOURCE = 512;
   private static final int MAX_REQUEST_ITEMS = 50;
   private static final Duration MIN_LEASE = Duration.ofSeconds(30);
   private static final Duration MAX_LEASE = Duration.ofHours(1);
@@ -41,6 +42,7 @@ public final class InboxService {
     requireText("content", command.content(), MAX_PAYLOAD, false);
     requireText("contentRef", command.contentRef(), MAX_REF, false);
     requireText("dedupeKey", command.dedupeKey(), MAX_DEDUPE, false);
+    String source = normalizeSource(command.source());
     if (command.priority() < -1000 || command.priority() > 1000) {
       throw invalid("priority 必须在 -1000..1000");
     }
@@ -55,7 +57,8 @@ public final class InboxService {
             command.contentRef(),
             command.dedupeKey(),
             command.priority(),
-            command.availableAt() == null ? now : command.availableAt());
+            command.availableAt() == null ? now : command.availableAt(),
+            source);
     PushResult result = store.push(normalized, now);
     if (!result.duplicate()) {
       notifier.changed();
@@ -367,6 +370,23 @@ public final class InboxService {
     if (value != null && value.length() > max) {
       throw invalid(name + " 超过长度上限 " + max);
     }
+  }
+
+  private static String normalizeSource(String source) {
+    if (source == null || source.isBlank()) {
+      return null;
+    }
+    source = source.trim();
+    if (source.length() > MAX_SOURCE) {
+      throw invalid("source 超过长度上限 " + MAX_SOURCE);
+    }
+    for (int i = 0; i < source.length(); i++) {
+      char value = source.charAt(i);
+      if (Character.isISOControl(value) || value == '\u2028' || value == '\u2029') {
+        throw invalid("source 必须是单行文本，不能包含控制字符");
+      }
+    }
+    return source;
   }
 
   private static InboxException invalid(String message) {

@@ -54,11 +54,12 @@ Content-Type: application/json
 {
   "channel": "ticket",
   "kind": "reply",
-  "title": "工单更新",
-  "payload": {"ticketId": "t-42", "body": "正文只允许在 claim 后返回"},
-  "payloadRef": null,
+  "summary": "工单更新",
+  "content": {"ticketId": "t-42", "body": "正文只允许在 claim 后返回"},
+  "contentRef": null,
   "dedupeKey": "ticket:t-42:reply:7",
-  "priority": 0
+  "priority": 0,
+  "source": "qq_group/bot-1/955432692"
 }
 ```
 
@@ -73,6 +74,7 @@ Content-Type: application/json
 | `payloadRef` | 否 | 外部正文引用，最长 2048 |
 | `dedupeKey` | 否 | 同 inbox+channel 的活跃通知去重 |
 | `priority` | 否 | -1000..1000，默认 0 |
+| `source` | 否 | 可选的不透明来源地址；最长 512，单行，拒绝控制字符；缺失/空白保存为 null |
 
 响应：
 
@@ -264,7 +266,9 @@ GET /v1/inboxes/app-a/items?channel=ticket&limit=50
       "itemId":"itm_...",
       "channel":"ticket",
       "kind":"reply",
+      "summary":"工单更新",
       "title":"工单更新",
+      "source":"qq_group/bot-1/955432692",
       "priority":0,
       "attempts":0,
       "createdAt":"2026-10-25T00:00:00Z"
@@ -281,7 +285,7 @@ GET /v1/inboxes/app-a/items?channel=ticket&limit=50
 {"itemIds":["itm_a","itm_b"],"leaseSeconds":300}
 ```
 
-返回 `{revision, available, claimed[], rejected[]}`。`claimed[]` 中每个 item 含 `claimToken` 与 payload；`rejected[]` 含 `subject/code/message`。
+返回 `{revision, available, claimed[], rejected[]}`。`claimed[]` 中每个 item 含 `claimToken`、payload 与（若有）`source`；`rejected[]` 含 `subject/code/message`。
 
 ### `POST /v1/inboxes/{inbox}/claims/renew`
 
@@ -472,6 +476,7 @@ Authorization: Bearer <items:read-token>
   "content": "客户补充了附件\n...",
   "contentRef": null,
   "priority": 10,
+  "source": "qq_group/bot-1/955432692",
   "status": "available",
   "attempts": 0,
   "revision": 3,
@@ -482,7 +487,8 @@ Authorization: Bearer <items:read-token>
 
 - `items:read` 可读；
 - 不 claim；
-- content 只在 view/claim 返回，不出现在 `/items` 列表或 SSE/wake。
+- content 只在 view/claim 返回，不出现在 `/items` 列表或 SSE/wake；
+- `source` 是可选来源地址，在 `/items` 列表、item view 与 claim 中返回，但不进入 SSE 事件。
 
 ## 修改 / 追加 / 删除
 
@@ -572,3 +578,23 @@ APPEND：
 - details 不包含 token、payload、content 或正文。
 
 客户端必须保留 `details`，不要只解析 `code/message`。
+
+
+---
+
+# v1.8 增补：可选 `source` 来源元数据（P8.2）
+
+Producer `POST /v1/inboxes/{inbox}/items` 和 MCP `inbox_push` 接受可选 `source`：
+
+```json
+{"channel":"ticket","summary":"新消息","source":"qq_group/bot-1/955432692"}
+```
+
+- 可选、非敏感、单行字符串；最大 512 字符；
+- 缺失、`null` 或空白按 `null` 保存；
+- 拒绝控制字符和 Unicode 行分隔符；
+- Inbox 不校验 QQ/URL 语法，不解释为工具调用；
+- `source` 由调用方保证不含 token/secret；DSH 等宿主负责安全投影；
+- `GET /items`、`GET /items/{itemId}` 与 claim 结果透传同一 `source`；SSE 不包含它；
+- 旧 JSON 没有 `source` 时行为不变；旧 SQLite 通过 `ensureColumn` 幂等增加
+  `inbox_item.source TEXT`，无需手工迁移。

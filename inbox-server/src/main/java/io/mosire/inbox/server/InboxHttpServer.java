@@ -452,7 +452,8 @@ public final class InboxHttpServer implements AutoCloseable {
                 contentRef,
                 request.dedupeKey(),
                 request.priority(),
-                null));
+                null,
+                request.source()));
     sendJson(
         exchange,
         result.duplicate() ? 200 : 201,
@@ -1019,7 +1020,8 @@ public final class InboxHttpServer implements AutoCloseable {
       String title,
       int priority,
       int attempts,
-      String createdAt) {
+      String createdAt,
+      String source) {
     static ItemSummaryView from(ItemSummary item) {
       return new ItemSummaryView(
           item.itemId(),
@@ -1029,7 +1031,8 @@ public final class InboxHttpServer implements AutoCloseable {
           item.summary(),
           item.priority(),
           item.attempts(),
-          item.createdAt().toString());
+          item.createdAt().toString(),
+          item.source());
     }
   }
 
@@ -1049,7 +1052,8 @@ public final class InboxHttpServer implements AutoCloseable {
       int attempts,
       long revision,
       String createdAt,
-      String updatedAt) {
+      String updatedAt,
+      String source) {
     static ItemDetailView from(ItemDetail item) {
       return new ItemDetailView(
           item.itemId(),
@@ -1065,7 +1069,8 @@ public final class InboxHttpServer implements AutoCloseable {
           item.attempts(),
           item.revision(),
           item.createdAt().toString(),
-          item.updatedAt().toString());
+          item.updatedAt().toString(),
+          item.source());
     }
   }
 
@@ -1138,5 +1143,6 @@ public final class InboxHttpServer implements AutoCloseable {
       String contentRef,
       String payloadRef,
       String dedupeKey,
-      int priority) {}
+      int priority,
+      String source) {}
 }

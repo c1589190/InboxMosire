@@ -91,6 +91,7 @@ paths:
                   payloadRef: null
                   dedupeKey: ticket-42:reply:7
                   priority: 0
+                  source: qq_group/bot-1/955432692
       responses:
         '201':
           description: Item created.
@@ -855,6 +856,17 @@ components:
           minimum: -1000
           maximum: 1000
           default: 0
+        source:
+          type:
+          - string
+          - 'null'
+          maxLength: 512
+          description: >-
+            Optional opaque, non-sensitive provenance address such as
+            qq_group/bot-1/955432692 or app_system/runtime/started. Single-line
+            text; control characters are rejected. Not validated as a QQ address
+            and never interpreted as a tool call. Callers must not place tokens or
+            secrets here; hosts such as DSH are responsible for safe projection.
     PushItemResponse:
       type: object
       required:
@@ -1063,6 +1075,12 @@ components:
         createdAt:
           type: string
           format: date-time
+        source:
+          type:
+          - string
+          - 'null'
+          maxLength: 512
+          description: Optional opaque provenance address; null when not supplied.
     ItemListResponse:
       type: object
       required:
@@ -1117,6 +1135,12 @@ components:
         claimExpiresAt:
           type: string
           format: date-time
+        source:
+          type:
+          - string
+          - 'null'
+          maxLength: 512
+          description: Optional opaque provenance address carried from push.
     Rejection:
       type: object
       properties:
@@ -1433,6 +1457,12 @@ components:
         updatedAt:
           type: string
           format: date-time
+        source:
+          type:
+          - string
+          - 'null'
+          maxLength: 512
+          description: Optional opaque provenance address carried from push.
     UpdateItemRequest:
       type: object
       additionalProperties: false

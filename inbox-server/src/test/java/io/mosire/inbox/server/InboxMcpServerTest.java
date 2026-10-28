@@ -67,7 +67,8 @@ class InboxMcpServerTest {
                         "kind", "reply",
                         "summary", "MCP task",
                         "content", Map.of("body", "payload-secret"),
-                        "dedupeKey", "mcp-1")));
+                        "dedupeKey", "mcp-1",
+                        "source", "qq_group/bot-1/955432692")));
         assertThat(pushed.isError()).isFalse();
         JsonNode push = json(pushed);
         assertThat(push.get("itemId").asText()).startsWith("itm_");
@@ -85,12 +86,15 @@ class InboxMcpServerTest {
         assertThat(list.get("count").asInt()).isEqualTo(1);
         assertThat(list.toString()).doesNotContain("payload-secret");
         assertThat(list.get("items").get(0).get("summary").asText()).isEqualTo("MCP task");
+        assertThat(list.get("items").get(0).get("source").asText())
+            .isEqualTo("qq_group/bot-1/955432692");
 
         McpSchema.CallToolResult viewed =
             client.callTool(call("inbox_view", Map.of("itemId", itemId)));
         JsonNode view = json(viewed);
         assertThat(view.get("summary").asText()).isEqualTo("MCP task");
         assertThat(view.get("content").get("body").asText()).isEqualTo("payload-secret");
+        assertThat(view.get("source").asText()).isEqualTo("qq_group/bot-1/955432692");
 
         McpSchema.CallToolResult updated =
             client.callTool(
@@ -129,6 +133,8 @@ class InboxMcpServerTest {
         assertThat(claim.get("claimed").get(0).get("content").asText())
             .contains("line-one")
             .contains("line-two");
+        assertThat(claim.get("claimed").get(0).get("source").asText())
+            .isEqualTo("qq_group/bot-1/955432692");
 
         McpSchema.CallToolResult claimedDelete =
             client.callTool(call("inbox_delete", Map.of("itemId", itemId)));
@@ -166,6 +172,9 @@ class InboxMcpServerTest {
                     "inbox_push",
                     Map.of("channel", "ticket", "summary", "delete me", "content", "x")));
         String secondId = json(secondPush).get("itemId").asText();
+        JsonNode legacyView =
+            json(client.callTool(call("inbox_view", Map.of("itemId", secondId))));
+        assertThat(legacyView.get("source").isNull()).isTrue();
         McpSchema.CallToolResult deleted =
             client.callTool(call("inbox_delete", Map.of("itemId", secondId, "restSeconds", 30)));
         assertThat(deleted.isError()).as(wireText(deleted)).isFalse();

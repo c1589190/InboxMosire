@@ -10,7 +10,20 @@ public record ItemSummary(
     String summary,
     int priority,
     int attempts,
-    Instant createdAt) {
+    Instant createdAt,
+    String source) {
+  /** 兼容旧调用方；source 为 null。 */
+  public ItemSummary(
+      String itemId,
+      String channel,
+      String kind,
+      String summary,
+      int priority,
+      int attempts,
+      Instant createdAt) {
+    this(itemId, channel, kind, summary, priority, attempts, createdAt, null);
+  }
+
   /** 兼容旧调用方的只读别名；新代码使用 summary()。 */
   @Deprecated
   public String title() {
