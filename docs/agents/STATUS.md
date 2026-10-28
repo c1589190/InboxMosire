@@ -8,6 +8,16 @@
 - 最近 Inbox 契约提交：`2c4b1c2 docs(errors): 发布 item 冲突 code/details 契约`
 - 最近 DSH 提交：`113a838 feat(rest): 以标准 inbox_rest 工具设置休息`
 
+## 2026-10-28 依赖刷新
+
+- AgentLib 固定 `0.2.4`（源码最新；公开 Pages 仍为 0.2.3，发布落差记录在 iiBot 计划）。
+- Jackson 统一 `2.22.4`，根 POM 导入 `jackson-bom`，修复 `jackson-dataformat-yaml` 曾解析为 2.18.4 的版本混杂。
+- SLF4J `2.0.20`；JUnit `6.1.3`；SpotBugs annotations `4.10.5`；
+  Maven compiler/resources/surefire/jar/enforcer 更新到当前稳定版。
+- 验证：`./mvnw -B -ntp clean verify` PASS，**37 tests / 0 failures / 0 errors / 0 skipped**；
+  dependency tree 显示 Jackson 全部为 2.22.4（annotations 2.22）。
+- 真实外部联调仍 `NOT_RUN`。
+
 ## 已完成
 
 - Java 21 + Maven 多模块：
