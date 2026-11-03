@@ -257,6 +257,31 @@ public final class InboxClient {
         201);
   }
 
+  /**
+   * 用调用方指定的 token 建凭据（"固定 token"）：需要 admin:credentials。
+   * token 值由调用方保管与写入文件，服务端只存 hash——重启、重装都不会变。
+   */
+  public InboxModels.IssuedCredentialView issueCredentialWithToken(
+      String inboxId,
+      String label,
+      Set<String> scopes,
+      Set<String> channels,
+      String token,
+      Long expiresInSeconds) {
+    java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+    body.put("label", label);
+    body.put("scopes", scopes == null ? Set.of() : scopes);
+    body.put("channels", channels == null ? Set.of() : channels);
+    body.put("expiresInSeconds", expiresInSeconds);
+    body.put("token", token);
+    return requestJson(
+        "POST",
+        "/v1/admin/inboxes/" + encode(inboxId) + "/credentials",
+        body,
+        InboxModels.IssuedCredentialView.class,
+        201);
+  }
+
   public InboxModels.CredentialList listCredentials(String inboxId) {
     String query = inboxId == null || inboxId.isBlank() ? "" : "?inbox=" + encode(inboxId);
     return requestJson(

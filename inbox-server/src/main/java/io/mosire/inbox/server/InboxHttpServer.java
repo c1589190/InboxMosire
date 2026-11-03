@@ -329,9 +329,19 @@ public final class InboxHttpServer implements AutoCloseable {
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
     CredentialPolicy.validateIssuedScopes(issuer, scopes, channels);
     Instant expiresAt = expiresAt(request.expiresInSeconds());
-    IssuedCredential issued =
-        credentials.issue(
-            request.label(), scopes, inboxId, channels, expiresAt, issuer.id());
+    String fixedToken = request.token() == null ? "" : request.token().trim();
+    IssuedCredential issued;
+    if (fixedToken.isEmpty()) {
+      issued = credentials.issue(request.label(), scopes, inboxId, channels, expiresAt,
+          issuer.id());
+    } else {
+      // 固定 token = 调用方自己挑秘密值。权限边界仍由 requireCanIssueFor +
+      // validateIssuedScopes 决定（不能签出超过自身 scope/channel 的凭据），
+      // 所以这里不再额外要求 admin —— embedded provisioner 就该能给自己定 token。
+      requireFixedTokenShape(fixedToken);
+      issued = credentials.issueWithToken(request.label(), scopes, inboxId, channels,
+          expiresAt, issuer.id(), fixedToken);
+    }
     sendJson(
         exchange,
         201,
@@ -384,6 +394,13 @@ public final class InboxHttpServer implements AutoCloseable {
     } catch (Exception e) {
       sendJson(exchange, 400, new ApiError("INVALID_JSON", "请求体不是合法 JSON").body());
       return null;
+    }
+  }
+
+  /** 固定 token 的形状：16..200 个可见 ASCII，不含空白/控制符（值由调用方保管）。 */
+  private static void requireFixedTokenShape(String token) {
+    if (!token.matches("[!-~]{16,200}")) {
+      throw new IllegalArgumentException("token 必须是 16..200 个可见 ASCII 字符");
     }
   }
 
@@ -1099,7 +1116,8 @@ public final class InboxHttpServer implements AutoCloseable {
   record ReleaseRequest(List<String> claimTokens) {}
 
   record CredentialIssueRequest(
-      String label, List<String> scopes, List<String> channels, Long expiresInSeconds) {}
+      String label, List<String> scopes, List<String> channels, Long expiresInSeconds,
+      String token) {}
 
   record CredentialView(
       String id,

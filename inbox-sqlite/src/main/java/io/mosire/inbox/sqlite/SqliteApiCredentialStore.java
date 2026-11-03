@@ -88,10 +88,39 @@ public final class SqliteApiCredentialStore {
       Set<String> channels,
       Instant expiresAt,
       String createdBy) {
+    return insert(label, scopes, inboxId, channels, expiresAt, createdBy,
+        "inbox_" + randomToken());
+  }
+
+  /**
+   * 用**调用方指定的** token 建凭据（"固定 token"）：只在运维/自托管场景用，
+   * 好处是 token 值来自配置、可写进部署清单、重启不变。重复值直接拒绝。
+   */
+  public IssuedCredential issueWithToken(
+      String label,
+      Set<String> scopes,
+      String inboxId,
+      Set<String> channels,
+      Instant expiresAt,
+      String createdBy,
+      String token) {
+    if (token == null || token.isBlank()) {
+      throw SqliteSupport.invalid("token 不能为空");
+    }
+    return insert(label, scopes, inboxId, channels, expiresAt, createdBy, token);
+  }
+
+  private IssuedCredential insert(
+      String label,
+      Set<String> scopes,
+      String inboxId,
+      Set<String> channels,
+      Instant expiresAt,
+      String createdBy,
+      String token) {
     validateIssue(label, scopes, inboxId);
     Set<String> safeScopes = normalize(scopes);
     Set<String> safeChannels = channels == null ? Set.of() : normalize(channels);
-    String token = "inbox_" + randomToken();
     String hash = sha256(token);
     String id = "cred_" + UUID.randomUUID();
     Instant now = Instant.now();
@@ -131,6 +160,10 @@ public final class SqliteApiCredentialStore {
       ps.executeUpdate();
       return new IssuedCredential(credential, token);
     } catch (SQLException e) {
+      if (String.valueOf(e.getMessage()).contains("UNIQUE")
+          && String.valueOf(e.getMessage()).toLowerCase().contains("token_hash")) {
+        throw SqliteSupport.invalid("该 token 已被其它 credential 使用");
+      }
       throw SqliteSupport.internal("签发 credential 失败", e);
     } finally {
       lock.unlock();
