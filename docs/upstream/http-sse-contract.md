@@ -326,6 +326,11 @@ channel-scoped `items:read` / `items:manage` token 只能看到并 claim 自己 
 }
 ```
 
+`expiresInSeconds` 为 `null` 或 `0` 时签发**不限期凭据**（响应里 `expiresAt: null`）：
+token 只承担识别与授权，撤销只能靠 `revoke` / `rotate`。取值范围 `1..31536000`（约 1 年），
+超出即 `INVALID_ARGUMENT`。本机 program 给自己签 adapter token 时推荐不限期——否则
+24 小时一到，adapter 侧会突然 401。
+
 响应是唯一一次包含 raw token：
 
 ```json

@@ -285,9 +285,17 @@ public final class InboxClient {
     return requestJson("GET", "/v1/admin/whoami", null, InboxModels.CredentialView.class, 200);
   }
 
+  /** wake/adapter token 的固定 scope 集合（只读板面 + 占位）。 */
+  public static final Set<String> WAKE_SCOPES =
+      Set.of("status:read", "events:read", "items:read", "inbox:occupy");
+
   /**
    * program-owned MCP 的标准 provisioning 流程：为 DSH adapter 签发一个只读 token，
    * 写入本地 secret 文件，并返回不含 raw token 的 BindingDescriptor。
+   *
+   * <p>{@code ttl} 为 {@code null} / 零 / 负数 → **不限期凭据**（服务端存
+   * {@code expires_at = null}，永不自动过期，只能 revoke/rotate）。这适合本机
+   * program 自己的 adapter：token 只是"识别 + 授权"，不该因为 24 小时到了就失效。
    */
   public InboxModels.BindingDescriptor issueBinding(
       String inboxId,
@@ -295,15 +303,15 @@ public final class InboxClient {
       Set<String> channels,
       Path tokenFile,
       Duration ttl) {
-    long seconds = Math.max(60, ttl.toSeconds());
+    Long seconds =
+        (ttl == null || ttl.isZero() || ttl.isNegative())
+            ? null
+            : Math.max(60, ttl.toSeconds());
     InboxModels.IssuedCredentialView issued =
         issueCredential(
             inboxId,
             new InboxModels.CredentialIssueRequest(
-                label,
-                Set.of("status:read", "events:read", "items:read", "inbox:occupy"),
-                channels == null ? Set.of() : channels,
-                seconds));
+                label, WAKE_SCOPES, channels == null ? Set.of() : channels, seconds));
     TokenStore.writeAtomic(tokenFile, issued.token());
     String ref = "file:" + tokenFile.toAbsolutePath().normalize();
     return new InboxModels.BindingDescriptor(inboxId, baseUri.toString(), ref, channels, label);
