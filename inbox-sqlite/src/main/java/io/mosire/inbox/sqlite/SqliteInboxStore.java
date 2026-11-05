@@ -12,6 +12,10 @@ import io.mosire.inbox.core.CompleteResult;
 import io.mosire.inbox.core.Completion;
 import io.mosire.inbox.core.CompletionAck;
 import io.mosire.inbox.core.CompletionOutcome;
+import io.mosire.inbox.core.DeliveryAck;
+import io.mosire.inbox.core.DeliveryAttachment;
+import io.mosire.inbox.core.DeliveryPolicy;
+import io.mosire.inbox.core.InboxEventTypes;
 import io.mosire.inbox.core.InboxOccupancy;
 import io.mosire.inbox.core.InboxException;
 import io.mosire.inbox.core.InboxStatus;
@@ -41,6 +45,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -56,6 +61,8 @@ public final class SqliteInboxStore implements InboxStore {
   private static final ObjectMapper JSON = new ObjectMapper();
   private static final TypeReference<Map<String, ChannelCounts>> CHANNELS_TYPE =
       new TypeReference<>() {};
+  private static final TypeReference<Map<String, Object>> DATA_TYPE = new TypeReference<>() {};
+  private static final String TEXT_SEPARATOR = "\n\n";
   private static final SecureRandom RANDOM = new SecureRandom();
   private static final Base64.Encoder B64 = Base64.getUrlEncoder().withoutPadding();
 
@@ -164,6 +171,32 @@ public final class SqliteInboxStore implements InboxStore {
           )
           """);
       exec(st, "CREATE INDEX IF NOT EXISTS idx_event_inbox_seq ON inbox_event(inbox_id, seq)");
+      exec(
+          st,
+          """
+          CREATE TABLE IF NOT EXISTS inbox_delivery (
+            delivery_id TEXT PRIMARY KEY,
+            inbox_id    TEXT NOT NULL REFERENCES inbox(id) ON DELETE CASCADE,
+            item_ids    TEXT NOT NULL,
+            important   INTEGER NOT NULL,
+            text        TEXT NOT NULL,
+            attachments TEXT,
+            created_at  TEXT NOT NULL,
+            acked_at    TEXT,
+            attempts    INTEGER NOT NULL DEFAULT 1,
+            state       TEXT NOT NULL
+          )
+          """);
+      exec(
+          st,
+          "CREATE INDEX IF NOT EXISTS idx_delivery_inbox_state ON inbox_delivery(inbox_id, state)");
+      ensureColumn(
+          st,
+          "inbox_event",
+          "event_type",
+          "TEXT NOT NULL DEFAULT '" + InboxEventTypes.CHANGED + "'");
+      ensureColumn(st, "inbox_event", "delivery_id", "TEXT");
+      ensureColumn(st, "inbox_event", "data_json", "TEXT");
       ensureColumn(st, "inbox", "occupied", "INTEGER NOT NULL DEFAULT 0");
       ensureColumn(st, "inbox", "occupied_by", "TEXT");
       ensureColumn(st, "inbox", "occupied_at", "TEXT");
@@ -172,6 +205,12 @@ public final class SqliteInboxStore implements InboxStore {
       exec(
           st,
           "INSERT OR IGNORE INTO schema_migration(version, applied_at) VALUES (1, '"
+              + Instant.now()
+              + "')");
+      // v2: delivery 台账 + 事件类型/推送数据快照列。
+      exec(
+          st,
+          "INSERT OR IGNORE INTO schema_migration(version, applied_at) VALUES (2, '"
               + Instant.now()
               + "')");
       String now = Instant.now().toString();
@@ -987,6 +1026,397 @@ public final class SqliteInboxStore implements InboxStore {
   }
 
   @Override
+  public int deliverDue(Instant now, DeliveryPolicy policy) {
+    Objects.requireNonNull(now, "now");
+    Objects.requireNonNull(policy, "policy");
+    return inTransaction(
+        () -> {
+          List<String> inboxIds = new ArrayList<>();
+          try (PreparedStatement ps = connection.prepareStatement("SELECT id FROM inbox ORDER BY id");
+              ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+              inboxIds.add(rs.getString("id"));
+            }
+          }
+          int emitted = 0;
+          for (String inboxId : inboxIds) {
+            emitted += deliverInboxLocked(inboxId, now, policy);
+          }
+          return emitted;
+        });
+  }
+
+  private int deliverInboxLocked(String inboxId, Instant now, DeliveryPolicy policy)
+      throws SQLException {
+    int emitted = 0;
+    Set<String> covered = new HashSet<>();
+    try (PreparedStatement ps =
+        connection.prepareStatement("SELECT item_ids FROM inbox_delivery WHERE inbox_id = ?")) {
+      ps.setString(1, inboxId);
+      try (ResultSet rs = ps.executeQuery()) {
+        while (rs.next()) {
+          covered.addAll(splitCsv(rs.getString("item_ids")));
+        }
+      }
+    }
+
+    List<DeliveryRow> active = new ArrayList<>();
+    try (PreparedStatement ps =
+        connection.prepareStatement(
+            """
+            SELECT delivery_id, item_ids, important, text, attachments, created_at, acked_at,
+                   attempts, state
+            FROM inbox_delivery
+            WHERE inbox_id = ? AND state = 'delivered' AND acked_at IS NULL
+            ORDER BY created_at ASC
+            """)) {
+      ps.setString(1, inboxId);
+      try (ResultSet rs = ps.executeQuery()) {
+        while (rs.next()) {
+          active.add(deliveryRow(rs));
+        }
+      }
+    }
+    for (DeliveryRow row : active) {
+      Instant retryAt = row.createdAt().plus(policy.deliveryTtl().multipliedBy(row.attempts()));
+      if (now.isBefore(retryAt)) {
+        continue;
+      }
+      if (row.attempts() >= policy.maxAttempts()) {
+        try (PreparedStatement ps =
+            connection.prepareStatement(
+                "UPDATE inbox_delivery SET state = 'undelivered' WHERE delivery_id = ?")) {
+          ps.setString(1, row.deliveryId());
+          ps.executeUpdate();
+        }
+        continue;
+      }
+      try (PreparedStatement ps =
+          connection.prepareStatement(
+              "UPDATE inbox_delivery SET attempts = attempts + 1 WHERE delivery_id = ?")) {
+        ps.setString(1, row.deliveryId());
+        ps.executeUpdate();
+      }
+      InboxStatus status = statusLocked(inboxId, Set.of());
+      emitted +=
+          emitPushLocked(
+              inboxId,
+              status.revision(),
+              row.deliveryId(),
+              row.itemIds(),
+              row.text(),
+              row.attachments(),
+              row.important(),
+              policy,
+              now);
+    }
+
+    List<PendingItem> pending = new ArrayList<>();
+    try (PreparedStatement ps =
+        connection.prepareStatement(
+            """
+            SELECT id, channel, payload, payload_ref, priority, available_at
+            FROM inbox_item
+            WHERE inbox_id = ? AND status = 'available' AND available_at <= ?
+            ORDER BY priority DESC, created_at ASC
+            """)) {
+      ps.setString(1, inboxId);
+      ps.setString(2, now.toString());
+      try (ResultSet rs = ps.executeQuery()) {
+        while (rs.next()) {
+          String itemId = rs.getString("id");
+          if (covered.contains(itemId)) {
+            continue;
+          }
+          int priority = rs.getInt("priority");
+          Instant availableAt = Instant.parse(rs.getString("available_at"));
+          Duration delay = policy.important(priority) ? policy.importantDelay() : policy.normalDelay();
+          if (now.isBefore(availableAt.plus(delay))) {
+            continue;
+          }
+          pending.add(
+              new PendingItem(
+                  itemId,
+                  rs.getString("channel"),
+                  rs.getString("payload"),
+                  rs.getString("payload_ref"),
+                  priority));
+        }
+      }
+    }
+    if (pending.isEmpty()) {
+      return emitted;
+    }
+
+    List<String> itemIds = new ArrayList<>(pending.size());
+    List<String> texts = new ArrayList<>(pending.size());
+    List<DeliveryAttachment> attachments = new ArrayList<>();
+    Set<String> attachmentRefs = new LinkedHashSet<>();
+    Set<String> channels = new LinkedHashSet<>();
+    boolean important = false;
+    for (PendingItem item : pending) {
+      itemIds.add(item.itemId());
+      texts.add(item.content() == null ? "" : item.content());
+      channels.add(item.channel());
+      important = important || policy.important(item.priority());
+      if (item.contentRef() != null && !item.contentRef().isBlank()
+          && attachmentRefs.add(item.contentRef())) {
+        attachments.add(
+            new DeliveryAttachment(attachmentName(item.contentRef(), item.itemId()), item.contentRef()));
+      }
+    }
+    String text = String.join(TEXT_SEPARATOR, texts);
+    String deliveryId = "dlv_" + UUID.randomUUID();
+    long revision = nextRevisionLocked(inboxId, now);
+    try (PreparedStatement ps =
+        connection.prepareStatement(
+            """
+            INSERT INTO inbox_delivery
+              (delivery_id, inbox_id, item_ids, important, text, attachments, created_at,
+               acked_at, attempts, state)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 1, 'delivered')
+            """)) {
+      ps.setString(1, deliveryId);
+      ps.setString(2, inboxId);
+      ps.setString(3, String.join(",", itemIds));
+      ps.setInt(4, important ? 1 : 0);
+      ps.setString(5, text);
+      ps.setString(6, writeAttachments(attachments));
+      ps.setString(7, now.toString());
+      ps.executeUpdate();
+    }
+    recordEventLocked(inboxId, revision, List.copyOf(channels), now);
+    emitted +=
+        emitPushLocked(
+            inboxId, revision, deliveryId, itemIds, text, attachments, important, policy, now);
+    return emitted;
+  }
+
+  private int emitPushLocked(
+      String inboxId,
+      long revision,
+      String deliveryId,
+      List<String> itemIds,
+      String text,
+      List<DeliveryAttachment> attachments,
+      boolean important,
+      DeliveryPolicy policy,
+      Instant now)
+      throws SQLException {
+    InboxStatus status = statusLocked(inboxId, Set.of());
+    int remaining = (int) (status.available() + status.claimed());
+    int remainingImportant = remainingImportantLocked(inboxId, policy.notifyThreshold());
+    List<Map<String, Object>> attachmentData = new ArrayList<>(attachments.size());
+    for (DeliveryAttachment attachment : attachments) {
+      Map<String, Object> entry = new LinkedHashMap<>();
+      entry.put("name", attachment.name());
+      entry.put("ref", attachment.ref());
+      attachmentData.add(entry);
+    }
+    Map<String, Object> data = new LinkedHashMap<>();
+    data.put("inbox", inboxId);
+    data.put("deliveryId", deliveryId);
+    data.put("itemIds", List.copyOf(itemIds));
+    data.put("text", text);
+    data.put("attachments", attachmentData);
+    data.put("important", important);
+    data.put("remaining", remaining);
+    data.put("revision", revision);
+    String dataJson;
+    try {
+      dataJson = JSON.writeValueAsString(data);
+    } catch (JsonProcessingException e) {
+      throw SqliteSupport.internal("序列化 push 事件失败", e);
+    }
+    Set<String> channels = new LinkedHashSet<>();
+    try (PreparedStatement ps =
+        connection.prepareStatement(
+            "SELECT channel FROM inbox_item WHERE inbox_id = ? AND id = ?")) {
+      for (String itemId : itemIds) {
+        ps.setString(1, inboxId);
+        ps.setString(2, itemId);
+        try (ResultSet rs = ps.executeQuery()) {
+          if (rs.next()) {
+            channels.add(rs.getString("channel"));
+          }
+        }
+      }
+    }
+    recordPushEventLocked(
+        inboxId, revision, deliveryId, dataJson, data, List.copyOf(channels), now);
+    return 1;
+  }
+
+  @Override
+  public DeliveryAck ackDelivery(
+      String inboxId, String deliveryId, Instant now, int notifyThreshold) {
+    Objects.requireNonNull(now, "now");
+    return inTransaction(
+        () -> {
+          requireInboxLocked(inboxId);
+          DeliveryRow row = findDeliveryLocked(inboxId, deliveryId);
+          if (row == null) {
+            throw SqliteSupport.notFound("delivery 不存在: " + deliveryId);
+          }
+          if (row.ackedAt() != null) {
+            InboxStatus status = statusLocked(inboxId, Set.of());
+            return new DeliveryAck(
+                deliveryId,
+                false,
+                List.of(),
+                (int) (status.available() + status.claimed()),
+                remainingImportantLocked(inboxId, notifyThreshold));
+          }
+
+          List<String> closable = new ArrayList<>();
+          Set<String> channels = new LinkedHashSet<>();
+          try (PreparedStatement ps =
+              connection.prepareStatement(
+                  "SELECT channel FROM inbox_item WHERE inbox_id = ? AND id = ? AND status = 'available'")) {
+            for (String itemId : row.itemIds()) {
+              ps.setString(1, inboxId);
+              ps.setString(2, itemId);
+              try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                  closable.add(itemId);
+                  channels.add(rs.getString("channel"));
+                }
+              }
+            }
+          }
+          long revision = 0L;
+          if (!closable.isEmpty()) {
+            revision = nextRevisionLocked(inboxId, now);
+            try (PreparedStatement ps =
+                connection.prepareStatement(
+                    """
+                    UPDATE inbox_item
+                    SET status = 'done', completed_at = ?, updated_at = ?, revision = ?,
+                        outcome = 'acked', outcome_summary = ?
+                    WHERE inbox_id = ? AND id = ? AND status = 'available'
+                    """)) {
+              for (String itemId : closable) {
+                ps.setString(1, now.toString());
+                ps.setString(2, now.toString());
+                ps.setLong(3, revision);
+                ps.setString(4, "acked via delivery " + deliveryId);
+                ps.setString(5, inboxId);
+                ps.setString(6, itemId);
+                ps.addBatch();
+              }
+              ps.executeBatch();
+            }
+            recordEventLocked(inboxId, revision, List.copyOf(channels), now);
+          }
+          try (PreparedStatement ps =
+              connection.prepareStatement(
+                  "UPDATE inbox_delivery SET acked_at = ?, state = 'acked' WHERE delivery_id = ?")) {
+            ps.setString(1, now.toString());
+            ps.setString(2, deliveryId);
+            ps.executeUpdate();
+          }
+          InboxStatus status = statusLocked(inboxId, Set.of());
+          return new DeliveryAck(
+              deliveryId,
+              true,
+              List.copyOf(closable),
+              (int) (status.available() + status.claimed()),
+              remainingImportantLocked(inboxId, notifyThreshold));
+        });
+  }
+
+  private DeliveryRow findDeliveryLocked(String inboxId, String deliveryId) throws SQLException {
+    try (PreparedStatement ps =
+        connection.prepareStatement(
+            """
+            SELECT delivery_id, item_ids, important, text, attachments, created_at, acked_at,
+                   attempts, state
+            FROM inbox_delivery
+            WHERE inbox_id = ? AND delivery_id = ?
+            """)) {
+      ps.setString(1, inboxId);
+      ps.setString(2, deliveryId);
+      try (ResultSet rs = ps.executeQuery()) {
+        return rs.next() ? deliveryRow(rs) : null;
+      }
+    }
+  }
+
+  private static DeliveryRow deliveryRow(ResultSet rs) throws SQLException {
+    return new DeliveryRow(
+        rs.getString("delivery_id"),
+        splitCsv(rs.getString("item_ids")),
+        rs.getInt("important") != 0,
+        rs.getString("text"),
+        parseAttachments(rs.getString("attachments")),
+        Instant.parse(rs.getString("created_at")),
+        parseInstant(rs.getString("acked_at")),
+        rs.getInt("attempts"),
+        rs.getString("state"));
+  }
+
+  private int remainingImportantLocked(String inboxId, int threshold) throws SQLException {
+    try (PreparedStatement ps =
+        connection.prepareStatement(
+            """
+            SELECT COUNT(*) AS amount FROM inbox_item
+            WHERE inbox_id = ? AND status IN ('available', 'claimed') AND priority >= ?
+            """)) {
+      ps.setString(1, inboxId);
+      ps.setInt(2, threshold);
+      try (ResultSet rs = ps.executeQuery()) {
+        return rs.next() ? rs.getInt("amount") : 0;
+      }
+    }
+  }
+
+  private static String writeAttachments(List<DeliveryAttachment> attachments) {
+    List<Map<String, String>> values = new ArrayList<>(attachments.size());
+    for (DeliveryAttachment attachment : attachments) {
+      values.add(Map.of("name", attachment.name(), "ref", attachment.ref()));
+    }
+    try {
+      return JSON.writeValueAsString(values);
+    } catch (JsonProcessingException e) {
+      throw SqliteSupport.internal("序列化 attachments 失败", e);
+    }
+  }
+
+  private static List<DeliveryAttachment> parseAttachments(String value) {
+    if (value == null || value.isBlank()) {
+      return List.of();
+    }
+    try {
+      List<Map<String, String>> raw =
+          JSON.readValue(value, new TypeReference<List<Map<String, String>>>() {});
+      List<DeliveryAttachment> out = new ArrayList<>(raw.size());
+      for (Map<String, String> entry : raw) {
+        out.add(new DeliveryAttachment(entry.get("name"), entry.get("ref")));
+      }
+      return List.copyOf(out);
+    } catch (JsonProcessingException e) {
+      throw SqliteSupport.internal("解析 attachments 失败", e);
+    }
+  }
+
+  private static String attachmentName(String ref, String itemId) {
+    int slash = Math.max(ref.lastIndexOf('/'), ref.lastIndexOf('\\'));
+    String name = slash >= 0 ? ref.substring(slash + 1) : ref;
+    return name.isBlank() ? itemId : name;
+  }
+
+  private static Map<String, Object> parseData(String value) {
+    if (value == null || value.isBlank()) {
+      return null;
+    }
+    try {
+      return JSON.readValue(value, DATA_TYPE);
+    } catch (JsonProcessingException e) {
+      throw SqliteSupport.internal("解析 event data 失败", e);
+    }
+  }
+
+  @Override
   public List<StoredEvent> eventsAfter(String inboxId, long afterSeq, int limit) {
     lock.lock();
     try {
@@ -995,7 +1425,8 @@ public final class SqliteInboxStore implements InboxStore {
           connection.prepareStatement(
               """
               SELECT seq, event_id, inbox_id, revision, available, claimed,
-                     channels_json, changed_channels, created_at
+                     channels_json, changed_channels, created_at,
+                     event_type, delivery_id, data_json
               FROM inbox_event
               WHERE inbox_id = ? AND seq > ?
               ORDER BY seq ASC
@@ -1019,7 +1450,12 @@ public final class SqliteInboxStore implements InboxStore {
                     rs.getLong("claimed"),
                     channels,
                     changed,
-                    Instant.parse(rs.getString("created_at"))));
+                    Instant.parse(rs.getString("created_at")),
+                    rs.getString("event_type") == null
+                        ? InboxEventTypes.CHANGED
+                        : rs.getString("event_type"),
+                    rs.getString("delivery_id"),
+                    parseData(rs.getString("data_json"))));
           }
           return List.copyOf(out);
         }
@@ -1067,8 +1503,8 @@ public final class SqliteInboxStore implements InboxStore {
             """
             INSERT INTO inbox_event
               (event_id, inbox_id, revision, available, claimed, channels_json,
-               changed_channels, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               changed_channels, created_at, event_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """)) {
       ps.setString(1, "evt_" + UUID.randomUUID());
       ps.setString(2, inboxId);
@@ -1078,6 +1514,42 @@ public final class SqliteInboxStore implements InboxStore {
       ps.setString(6, channelsJson);
       ps.setString(7, changed);
       ps.setString(8, now.toString());
+      ps.setString(9, InboxEventTypes.CHANGED);
+      ps.executeUpdate();
+    }
+    return status;
+  }
+
+  private InboxStatus recordPushEventLocked(
+      String inboxId,
+      long revision,
+      String deliveryId,
+      String dataJson,
+      Map<String, Object> data,
+      List<String> channels,
+      Instant now)
+      throws SQLException {
+    InboxStatus status = statusLocked(inboxId, Set.of());
+    String channelsJson = writeChannels(status.channels());
+    try (PreparedStatement ps =
+        connection.prepareStatement(
+            """
+            INSERT INTO inbox_event
+              (event_id, inbox_id, revision, available, claimed, channels_json,
+               changed_channels, created_at, event_type, delivery_id, data_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """)) {
+      ps.setString(1, "evt_" + UUID.randomUUID());
+      ps.setString(2, inboxId);
+      ps.setLong(3, revision);
+      ps.setLong(4, status.available());
+      ps.setLong(5, status.claimed());
+      ps.setString(6, channelsJson);
+      ps.setString(7, String.join(",", new LinkedHashSet<>(channels)));
+      ps.setString(8, now.toString());
+      ps.setString(9, InboxEventTypes.PUSH);
+      ps.setString(10, deliveryId);
+      ps.setString(11, dataJson);
       ps.executeUpdate();
     }
     return status;
@@ -1355,6 +1827,20 @@ public final class SqliteInboxStore implements InboxStore {
 
   private record ItemUpdate(
       String summary, String content, String contentRef, String kind, int priority) {}
+
+  private record PendingItem(
+      String itemId, String channel, String content, String contentRef, int priority) {}
+
+  private record DeliveryRow(
+      String deliveryId,
+      List<String> itemIds,
+      boolean important,
+      String text,
+      List<DeliveryAttachment> attachments,
+      Instant createdAt,
+      Instant ackedAt,
+      int attempts,
+      String state) {}
 
   private record ItemRow(
       String itemId,

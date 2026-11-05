@@ -7,6 +7,7 @@ import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
 import io.modelcontextprotocol.spec.McpSchema;
+import io.mosire.inbox.core.StoredEvent;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -55,7 +56,8 @@ class InboxMcpServerTest {
                 "inbox_view",
                 "inbox_update",
                 "inbox_append",
-                "inbox_delete")
+                "inbox_delete",
+                "inbox_ack")
             .doesNotContain("inbox_wait");
 
         McpSchema.CallToolResult pushed =
@@ -66,7 +68,7 @@ class InboxMcpServerTest {
                         "channel", "ticket",
                         "kind", "reply",
                         "summary", "MCP task",
-                        "content", Map.of("body", "payload-secret"),
+                        "content", "payload-secret",
                         "dedupeKey", "mcp-1",
                         "source", "qq_group/bot-1/955432692")));
         assertThat(pushed.isError()).isFalse();
@@ -93,7 +95,7 @@ class InboxMcpServerTest {
             client.callTool(call("inbox_view", Map.of("itemId", itemId)));
         JsonNode view = json(viewed);
         assertThat(view.get("summary").asText()).isEqualTo("MCP task");
-        assertThat(view.get("content").get("body").asText()).isEqualTo("payload-secret");
+        assertThat(view.get("content").asText()).isEqualTo("payload-secret");
         assertThat(view.get("source").asText()).isEqualTo("qq_group/bot-1/955432692");
 
         McpSchema.CallToolResult updated =
@@ -241,5 +243,75 @@ class InboxMcpServerTest {
   private static String wireText(McpSchema.CallToolResult result) {
     var content = result.content();
     return content.getFirst() instanceof McpSchema.TextContent text ? text.text() : content.toString();
+  }
+
+  @Test
+  void inboxAckClosesDeliveredItemsAndIsIdempotent() throws Exception {
+    ServerConfig config =
+        new ServerConfig(
+            temp,
+            "127.0.0.1",
+            0,
+            "127.0.0.1",
+            0,
+            "/mcp",
+            Duration.ofSeconds(30),
+            "main",
+            200,
+            Duration.ZERO,
+            Duration.ZERO,
+            Duration.ofSeconds(600),
+            3,
+            Duration.ofMillis(50));
+    try (InboxDaemon daemon = InboxDaemon.start(config)) {
+      HttpClientStreamableHttpTransport transport =
+          HttpClientStreamableHttpTransport.builder(
+                  "http://127.0.0.1:" + daemon.mcpPort())
+              .endpoint("/mcp")
+              .resumableStreams(false)
+              .connectTimeout(Duration.ofSeconds(5))
+              .build();
+      try (McpSyncClient client = McpClient.sync(transport).build()) {
+        client.initialize();
+        McpSchema.CallToolResult pushed =
+            client.callTool(
+                call(
+                    "inbox_push",
+                    Map.of(
+                        "channel",
+                        "ticket",
+                        "summary",
+                        "ack me",
+                        "content",
+                        "ACK_BODY",
+                        "priority",
+                        200)));
+        assertThat(pushed.isError()).as(wireText(pushed)).isFalse();
+        String itemId = json(pushed).get("itemId").asText();
+
+        daemon.service().deliverDue();
+        StoredEvent delivery =
+            daemon.service().eventsAfter("main", 0, 100).stream()
+                .filter(StoredEvent::isPush)
+                .findFirst()
+                .orElseThrow();
+        String deliveryId = (String) delivery.data().get("deliveryId");
+
+        McpSchema.CallToolResult acked =
+            client.callTool(call("inbox_ack", Map.of("deliveryId", deliveryId)));
+        assertThat(acked.isError()).as(wireText(acked)).isFalse();
+        JsonNode ackJson = json(acked);
+        assertThat(ackJson.get("acked").asBoolean()).isTrue();
+        assertThat(ackJson.get("closedItems").get(0).asText()).isEqualTo(itemId);
+        assertThat(ackJson.get("remaining").asInt()).isZero();
+        assertThat(ackJson.get("remainingImportant").asInt()).isZero();
+
+        JsonNode again =
+            json(client.callTool(call("inbox_ack", Map.of("deliveryId", deliveryId))));
+        assertThat(again.get("acked").asBoolean()).isFalse();
+        assertThat(again.get("closedItems")).isEmpty();
+        assertThat(again.get("remaining").asInt()).isZero();
+      }
+    }
   }
 }

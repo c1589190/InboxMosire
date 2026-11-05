@@ -6,6 +6,7 @@ import io.mosire.inbox.core.InboxException;
 import io.mosire.inbox.core.InboxService;
 import io.mosire.inbox.core.AppendItemCommand;
 import io.mosire.inbox.core.CompleteResult;
+import io.mosire.inbox.core.DeliveryAck;
 import io.mosire.inbox.core.Completion;
 import io.mosire.inbox.core.CompletionOutcome;
 import io.mosire.inbox.core.InboxStatus;
@@ -171,6 +172,13 @@ public final class InboxHttpServer implements AutoCloseable {
         && "items".equals(segments.get(3))
         && "append".equals(segments.get(5))) {
       routeAppend(exchange, segments.get(2), segments.get(4));
+      return;
+    }
+    if (segments.size() == 6
+        && "inboxes".equals(segments.get(1))
+        && "deliveries".equals(segments.get(3))
+        && "ack".equals(segments.get(5))) {
+      ackDelivery(exchange, segments.get(2), segments.get(4));
       return;
     }
     sendJson(exchange, 404, new ApiError("NOT_FOUND", "路由不存在").body());
@@ -422,6 +430,37 @@ public final class InboxHttpServer implements AutoCloseable {
     return credential;
   }
 
+  private void ackDelivery(HttpExchange exchange, String inboxId, String deliveryId)
+      throws IOException {
+    if (!"POST".equals(exchange.getRequestMethod())) {
+      methodNotAllowed(exchange, "POST");
+      return;
+    }
+    ApiCredential credential = requireAuth(exchange);
+    if (credential == null) {
+      return;
+    }
+    if (!credential.allowsInbox(inboxId)) {
+      sendJson(exchange, 403, new ApiError("FORBIDDEN", "token 无权访问该 inbox").body());
+      return;
+    }
+    if (!service.inboxExists(inboxId)) {
+      sendJson(exchange, 404, new ApiError("NOT_FOUND", "inbox 不存在").body());
+      return;
+    }
+    if (!requiresScope(exchange, credential, ApiScopes.ITEMS_MANAGE)) {
+      return;
+    }
+    DeliveryAck ack = service.ackDelivery(inboxId, deliveryId);
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("deliveryId", ack.deliveryId());
+    body.put("acked", ack.acked());
+    body.put("closedItems", ack.closedItems());
+    body.put("remaining", ack.remaining());
+    body.put("remainingImportant", ack.remainingImportant());
+    sendJson(exchange, 200, body);
+  }
+
   private void push(HttpExchange exchange, String inboxId, ApiCredential credential)
       throws IOException {
     String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
@@ -453,7 +492,7 @@ public final class InboxHttpServer implements AutoCloseable {
       sendJson(exchange, 403, new ApiError("FORBIDDEN", "token 无权写入该 channel").body());
       return;
     }
-    String content = jsonContent(request.content() != null ? request.content() : request.payload());
+    String content = renderedContent(request.content() != null ? request.content() : request.payload());
     String summary = request.summary() != null ? request.summary() : request.title();
     String contentRef =
         request.contentRef() != null ? request.contentRef() : request.payloadRef();
@@ -535,7 +574,7 @@ public final class InboxHttpServer implements AutoCloseable {
                     inboxId,
                     itemId,
                     request.summary(),
-                    jsonContent(request.content()),
+                    renderedContent(request.content()),
                     request.contentRef(),
                     request.kind(),
                     request.priority(),
@@ -587,7 +626,7 @@ public final class InboxHttpServer implements AutoCloseable {
             new AppendItemCommand(
                 inboxId,
                 itemId,
-                jsonContent(request.content()),
+                renderedContent(request.content()),
                 request.summary(),
                 request.priority(),
                 request.expectedRevision()),
@@ -595,12 +634,18 @@ public final class InboxHttpServer implements AutoCloseable {
     sendJson(exchange, 200, result);
   }
 
-  private static String jsonContent(com.fasterxml.jackson.databind.JsonNode value)
-      throws IOException {
+  /**
+   * W1-1：content 必须是已渲染好的单个字符串。绝不静默序列化 JSON 对象/数组，也不调用 toString。
+   */
+  private static String renderedContent(com.fasterxml.jackson.databind.JsonNode value) {
     if (value == null || value.isNull()) {
       return null;
     }
-    return value.isTextual() ? value.asText() : InboxJson.MAPPER.writeValueAsString(value);
+    if (!value.isTextual()) {
+      throw new InboxException(
+          InboxException.Code.INVALID_ARGUMENT, "content 必须是已渲染好的单个字符串", Map.of());
+    }
+    return value.asText();
   }
 
   private static Set<String> itemChannelScope(ApiCredential credential) {
@@ -817,7 +862,7 @@ public final class InboxHttpServer implements AutoCloseable {
     String json = InboxJson.MAPPER.writeValueAsString(CloudEvents.envelope(event));
     String frame =
         "id: " + event.seq() + "\n"
-            + "event: inbox.changed\n"
+            + "event: " + CloudEvents.sseEventName(event) + "\n"
             + "data: " + json + "\n\n";
     out.write(frame.getBytes(StandardCharsets.UTF_8));
     out.flush();
@@ -918,6 +963,15 @@ public final class InboxHttpServer implements AutoCloseable {
     if (allowed.isEmpty() || allowed.contains("*")) {
       return event;
     }
+    if (event.isPush()) {
+      // 合并 delivery 的正文可能跨 channel；只要有一个 channel 不在 token 范围内就整条丢弃，
+      // 避免把别的 channel 的正文泄露给受限 token。
+      if (event.changedChannels().isEmpty()
+          || allowed.containsAll(event.changedChannels())) {
+        return event;
+      }
+      return null;
+    }
     java.util.TreeMap<String, io.mosire.inbox.core.ChannelCounts> channels = new java.util.TreeMap<>();
     long available = 0;
     long claimed = 0;
@@ -942,7 +996,10 @@ public final class InboxHttpServer implements AutoCloseable {
         claimed,
         Map.copyOf(channels),
         changed,
-        event.createdAt());
+        event.createdAt(),
+        event.eventType(),
+        event.deliveryId(),
+        event.data());
   }
 
   private static void sendJson(HttpExchange exchange, int status, Object body) throws IOException {

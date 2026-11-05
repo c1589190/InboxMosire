@@ -237,6 +237,39 @@ public final class InboxMain {
             "sse-heartbeat-seconds",
             envInt("INBOX_SSE_HEARTBEAT_SECONDS", (int) defaults.sseHeartbeat().toSeconds()));
     String defaultInbox = args.get("default-inbox", env("INBOX_DEFAULT_INBOX", defaults.defaultInbox()));
+    int notifyThreshold =
+        intOpt(
+            args,
+            "notify-threshold",
+            envInt("INBOX_NOTIFY_THRESHOLD", defaults.notifyThreshold()));
+    int importantDelayMillis =
+        intOpt(
+            args,
+            "important-delay-millis",
+            envInt(
+                "INBOX_IMPORTANT_DELAY_MILLIS", (int) defaults.importantDelay().toMillis()));
+    int normalDelayMillis =
+        intOpt(
+            args,
+            "normal-delay-millis",
+            envInt("INBOX_NORMAL_DELAY_MILLIS", (int) defaults.normalDelay().toMillis()));
+    int deliveryTtlMillis =
+        intOpt(
+            args,
+            "delivery-ttl-millis",
+            envInt("INBOX_DELIVERY_TTL_MILLIS", (int) defaults.deliveryTtl().toMillis()));
+    int deliveryMaxAttempts =
+        intOpt(
+            args,
+            "delivery-max-attempts",
+            envInt("INBOX_DELIVERY_MAX_ATTEMPTS", defaults.deliveryMaxAttempts()));
+    int deliverySweepMillis =
+        intOpt(
+            args,
+            "delivery-sweep-interval-millis",
+            envInt(
+                "INBOX_DELIVERY_SWEEP_INTERVAL_MILLIS",
+                (int) defaults.deliverySweepInterval().toMillis()));
     return new ServerConfig(
         defaults.dataDir(),
         apiHost,
@@ -245,7 +278,13 @@ public final class InboxMain {
         mcpPort,
         mcpPath,
         Duration.ofSeconds(heartbeat),
-        defaultInbox);
+        defaultInbox,
+        notifyThreshold,
+        Duration.ofMillis(importantDelayMillis),
+        Duration.ofMillis(normalDelayMillis),
+        Duration.ofMillis(deliveryTtlMillis),
+        deliveryMaxAttempts,
+        Duration.ofMillis(deliverySweepMillis));
   }
 
   private static Path dataDir(Args args) {
@@ -289,6 +328,9 @@ public final class InboxMain {
           inboxd serve [--data-dir <dir>] [--api-host 127.0.0.1] [--api-port 18765]
                        [--mcp-host 127.0.0.1] [--mcp-port 18766] [--mcp-path /mcp]
                        [--sse-heartbeat-seconds 15] [--default-inbox main]
+                       [--notify-threshold 200] [--important-delay-millis 1000]
+                       [--normal-delay-millis 30000] [--delivery-ttl-millis 600000]
+                       [--delivery-max-attempts 3] [--delivery-sweep-interval-millis 500]
           inboxd inbox create --id <id> [--data-dir <dir>]
           inboxd token issue --label <label> --scope <scope> [--scope ...]
                            [--inbox main] [--channel <channel> ...]
@@ -309,6 +351,14 @@ public final class InboxMain {
           credentials:issue:self   issue child credentials for exact-bound inbox
           admin:inboxes            create/ensure any inbox
           admin:credentials        manage any credential
+
+        推送配置（环境变量同名 INBOX_ 前缀）:
+          INBOX_NOTIFY_THRESHOLD=200            priority >= 该值视为重要
+          INBOX_IMPORTANT_DELAY_MILLIS=1000     重要 item 首推等待
+          INBOX_NORMAL_DELAY_MILLIS=30000       普通 item 合并窗口
+          INBOX_DELIVERY_TTL_MILLIS=600000      未 ack 重推间隔
+          INBOX_DELIVERY_MAX_ATTEMPTS=3         最多推送次数（含首推）
+          INBOX_DELIVERY_SWEEP_INTERVAL_MILLIS=500  推送扫描间隔
 
         安全: v1 只允许 127.0.0.1/localhost。token 只显示一次，不写日志。
         """);

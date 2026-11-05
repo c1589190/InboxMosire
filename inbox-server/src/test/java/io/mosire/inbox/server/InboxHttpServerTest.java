@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URI;
@@ -107,7 +108,7 @@ class InboxHttpServerTest {
         client.send(
             pushRequest(
                 "{\"channel\":\"ticket\",\"kind\":\"reply\",\"title\":\"ticket 1\","
-                    + "\"payload\":{\"secret\":\"TOP_SECRET_BODY\"},\"dedupeKey\":\"t1\"}"),
+                    + "\"payload\":\"TOP_SECRET_BODY\",\"dedupeKey\":\"t1\"}"),
             HttpResponse.BodyHandlers.ofString());
     assertThat(created.statusCode()).isEqualTo(201);
     JsonNode push = InboxJson.MAPPER.readTree(created.body());
@@ -135,7 +136,7 @@ class InboxHttpServerTest {
         client.send(
             pushRequest(
                 "{\"channel\":\"ticket\",\"kind\":\"reply\",\"summary\":\"sourced\","
-                    + "\"content\":{\"body\":\"x\"},\"source\":\"" + source + "\"}"),
+                    + "\"content\":\"x\",\"source\":\"" + source + "\"}"),
             HttpResponse.BodyHandlers.ofString());
     assertThat(sourced.statusCode()).isEqualTo(201);
     String sourcedId = InboxJson.MAPPER.readTree(sourced.body()).get("itemId").asText();
@@ -225,7 +226,7 @@ class InboxHttpServerTest {
         client.send(
             pushRequest(
                 "{\"channel\":\"ticket\",\"kind\":\"reply\",\"title\":\"ticket\","
-                    + "\"payload\":{\"secret\":\"TOP_SECRET_BODY\"},"
+                    + "\"payload\":\"TOP_SECRET_BODY\","
                     + "\"source\":\"" + source + "\"}"),
             HttpResponse.BodyHandlers.ofString());
     assertThat(pushed.statusCode()).isEqualTo(201);
@@ -342,6 +343,125 @@ class InboxHttpServerTest {
       }
     }
     throw new AssertionError("item not found: " + itemId);
+  }
+
+  @Test
+  void nonStringContentIsRejectedWithInvalidArgument() throws Exception {
+    HttpResponse<String> objectContent =
+        client.send(
+            pushRequest("{\"channel\":\"ticket\",\"content\":{\"body\":\"x\"}}"),
+            HttpResponse.BodyHandlers.ofString());
+    assertThat(objectContent.statusCode()).isEqualTo(422);
+    assertThat(objectContent.body()).contains("content 必须是已渲染好的单个字符串");
+
+    HttpResponse<String> arrayPayload =
+        client.send(
+            pushRequest("{\"channel\":\"ticket\",\"payload\":[\"x\"]}"),
+            HttpResponse.BodyHandlers.ofString());
+    assertThat(arrayPayload.statusCode()).isEqualTo(422);
+    assertThat(arrayPayload.body()).contains("content 必须是已渲染好的单个字符串");
+  }
+
+  @Test
+  void importantDeliveryStreamsPushEventAndAckIsIdempotent() throws Exception {
+    String ackToken =
+        daemon
+            .database()
+            .credentials()
+            .issue(
+                "acker",
+                Set.of(ApiScopes.ITEMS_MANAGE, ApiScopes.EVENTS_READ, ApiScopes.STATUS_READ),
+                "main",
+                Set.of())
+            .token();
+    HttpRequest streamRequest =
+        HttpRequest.newBuilder(URI.create(apiBase + "/events"))
+            .header("Authorization", "Bearer " + ackToken)
+            .header("Accept", "text/event-stream")
+            .GET()
+            .build();
+    HttpResponse<InputStream> stream =
+        client.send(streamRequest, HttpResponse.BodyHandlers.ofInputStream());
+    assertThat(stream.statusCode()).isEqualTo(200);
+    BufferedReader reader =
+        new BufferedReader(new InputStreamReader(stream.body(), StandardCharsets.UTF_8));
+    try {
+      HttpResponse<String> pushed =
+          client.send(
+              pushRequest(
+                  "{\"channel\":\"ticket\",\"kind\":\"reply\",\"summary\":\"push me\","
+                      + "\"content\":\"PUSH_TEXT_ONLY\",\"priority\":200}"),
+              HttpResponse.BodyHandlers.ofString());
+      assertThat(pushed.statusCode()).isEqualTo(201);
+      String itemId = InboxJson.MAPPER.readTree(pushed.body()).get("itemId").asText();
+
+      String frame = readFrameUntil(reader, "event: inbox.push", Duration.ofSeconds(10));
+      assertThat(frame).contains("PUSH_TEXT_ONLY").doesNotContain(ackToken);
+      JsonNode event = eventFromFrame(frame);
+      assertThat(event.get("type").asText()).isEqualTo(CloudEvents.PUSH_TYPE);
+      JsonNode data = event.get("data");
+      assertThat(data.get("inbox").asText()).isEqualTo("main");
+      assertThat(data.get("text").asText()).isEqualTo("PUSH_TEXT_ONLY");
+      assertThat(data.get("important").asBoolean()).isTrue();
+      assertThat(data.get("itemIds").get(0).asText()).isEqualTo(itemId);
+      assertThat(data.get("attachments")).isEmpty();
+      assertThat(data.get("remaining").asInt()).isEqualTo(1);
+      String deliveryId = data.get("deliveryId").asText();
+      assertThat(deliveryId).startsWith("dlv_");
+
+      HttpResponse<String> forbidden = postAck(producerToken, deliveryId);
+      assertThat(forbidden.statusCode()).isEqualTo(403);
+
+      HttpResponse<String> ack = postAck(ackToken, deliveryId);
+      assertThat(ack.statusCode()).isEqualTo(200);
+      JsonNode ackJson = InboxJson.MAPPER.readTree(ack.body());
+      assertThat(ackJson.get("acked").asBoolean()).isTrue();
+      assertThat(ackJson.get("closedItems").get(0).asText()).isEqualTo(itemId);
+      assertThat(ackJson.get("remaining").asInt()).isZero();
+      assertThat(ackJson.get("remainingImportant").asInt()).isZero();
+
+      HttpResponse<String> again = postAck(ackToken, deliveryId);
+      assertThat(again.statusCode()).isEqualTo(200);
+      JsonNode againJson = InboxJson.MAPPER.readTree(again.body());
+      assertThat(againJson.get("acked").asBoolean()).isFalse();
+      assertThat(againJson.get("closedItems")).isEmpty();
+      assertThat(againJson.get("remaining").asInt()).isZero();
+    } finally {
+      stream.body().close();
+    }
+  }
+
+  private HttpResponse<String> postAck(String token, String deliveryId) throws Exception {
+    return client.send(
+        HttpRequest.newBuilder(URI.create(apiBase + "/deliveries/" + deliveryId + "/ack"))
+            .header("Authorization", "Bearer " + token)
+            .POST(HttpRequest.BodyPublishers.noBody())
+            .build(),
+        HttpResponse.BodyHandlers.ofString());
+  }
+
+  private static String readFrameUntil(BufferedReader reader, String marker, Duration timeout)
+      throws IOException {
+    long deadline = System.nanoTime() + timeout.toNanos();
+    while (System.nanoTime() < deadline) {
+      String frame = nextFrame(reader);
+      if (frame.lines().anyMatch(line -> line.equals(marker))) {
+        return frame;
+      }
+    }
+    throw new AssertionError("未在超时前收到 " + marker);
+  }
+
+  private static String nextFrame(BufferedReader reader) throws IOException {
+    StringBuilder frame = new StringBuilder();
+    String line;
+    while ((line = reader.readLine()) != null) {
+      if (line.isEmpty()) {
+        return frame.toString();
+      }
+      frame.append(line).append('\n');
+    }
+    return frame.toString();
   }
 
   private HttpRequest pushRequest(String body) {

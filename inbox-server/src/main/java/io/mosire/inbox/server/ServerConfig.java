@@ -1,5 +1,6 @@
 package io.mosire.inbox.server;
 
+import io.mosire.inbox.core.DeliveryPolicy;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.file.Path;
@@ -13,7 +14,13 @@ public record ServerConfig(
     int mcpPort,
     String mcpPath,
     Duration sseHeartbeat,
-    String defaultInbox) {
+    String defaultInbox,
+    int notifyThreshold,
+    Duration importantDelay,
+    Duration normalDelay,
+    Duration deliveryTtl,
+    int deliveryMaxAttempts,
+    Duration deliverySweepInterval) {
 
   public static ServerConfig defaults(Path dataDir) {
     return new ServerConfig(
@@ -24,7 +31,40 @@ public record ServerConfig(
         18766,
         "/mcp",
         Duration.ofSeconds(15),
-        "main");
+        "main",
+        DeliveryPolicy.DEFAULT_NOTIFY_THRESHOLD,
+        DeliveryPolicy.DEFAULT_IMPORTANT_DELAY,
+        DeliveryPolicy.DEFAULT_NORMAL_DELAY,
+        DeliveryPolicy.DEFAULT_DELIVERY_TTL,
+        DeliveryPolicy.DEFAULT_MAX_ATTEMPTS,
+        Duration.ofMillis(500));
+  }
+
+  /** 兼容旧调用方：使用默认档位/推送配置。 */
+  public ServerConfig(
+      Path dataDir,
+      String apiHost,
+      int apiPort,
+      String mcpHost,
+      int mcpPort,
+      String mcpPath,
+      Duration sseHeartbeat,
+      String defaultInbox) {
+    this(
+        dataDir,
+        apiHost,
+        apiPort,
+        mcpHost,
+        mcpPort,
+        mcpPath,
+        sseHeartbeat,
+        defaultInbox,
+        DeliveryPolicy.DEFAULT_NOTIFY_THRESHOLD,
+        DeliveryPolicy.DEFAULT_IMPORTANT_DELAY,
+        DeliveryPolicy.DEFAULT_NORMAL_DELAY,
+        DeliveryPolicy.DEFAULT_DELIVERY_TTL,
+        DeliveryPolicy.DEFAULT_MAX_ATTEMPTS,
+        Duration.ofMillis(500));
   }
 
   public ServerConfig {
@@ -51,6 +91,33 @@ public record ServerConfig(
     }
     if (defaultInbox == null || defaultInbox.isBlank()) {
       throw new IllegalArgumentException("defaultInbox 不能为空");
+    }
+    if (notifyThreshold < -1000 || notifyThreshold > 1000) {
+      throw new IllegalArgumentException("notifyThreshold 必须在 -1000..1000");
+    }
+    requireNonNegative(importantDelay, "importantDelay");
+    requireNonNegative(normalDelay, "normalDelay");
+    requirePositive(deliveryTtl, "deliveryTtl");
+    if (deliveryMaxAttempts < 1 || deliveryMaxAttempts > 100) {
+      throw new IllegalArgumentException("deliveryMaxAttempts 必须在 1..100");
+    }
+    requirePositive(deliverySweepInterval, "deliverySweepInterval");
+  }
+
+  public DeliveryPolicy deliveryPolicy() {
+    return new DeliveryPolicy(
+        notifyThreshold, importantDelay, normalDelay, deliveryTtl, deliveryMaxAttempts);
+  }
+
+  private static void requirePositive(Duration value, String name) {
+    if (value == null || value.isNegative() || value.isZero()) {
+      throw new IllegalArgumentException(name + " 必须为正");
+    }
+  }
+
+  private static void requireNonNegative(Duration value, String name) {
+    if (value == null || value.isNegative()) {
+      throw new IllegalArgumentException(name + " 不能为负");
     }
   }
 

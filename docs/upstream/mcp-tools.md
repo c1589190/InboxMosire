@@ -28,6 +28,11 @@
 | `inbox_complete` | 完成/失败归档 claim |
 | `inbox_release` | 放回 available |
 | `inbox_push` | Agent 自己压入任务 |
+| `inbox_ack` | ack 一条推送 delivery，关闭其 available item |
+
+## 2.1 `inbox_ack`
+
+参数 `{deliveryId, inbox?}`。返回 `{deliveryId, acked, closedItems, remaining, remainingImportant}`；重复 ack 返回 `acked=false`。
 
 ## 3. 推荐 Agent 循环
 

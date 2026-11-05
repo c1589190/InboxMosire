@@ -99,14 +99,11 @@ final class McpToolSupport {
     if (summary == null) {
       summary = optionalString(args, "title");
     }
-    JsonNode contentNode = InboxJson.MAPPER.valueToTree(args.get("content"));
-    if (contentNode == null || contentNode.isNull()) {
-      contentNode = InboxJson.MAPPER.valueToTree(args.get("payload"));
+    Object rawContent = args.get("content");
+    if (rawContent == null) {
+      rawContent = args.get("payload");
     }
-    String content = null;
-    if (contentNode != null && !contentNode.isNull()) {
-      content = contentNode.isTextual() ? contentNode.asText() : contentNode.toString();
-    }
+    String content = renderedContent(rawContent);
     String contentRef = optionalString(args, "contentRef");
     if (contentRef == null) {
       contentRef = optionalString(args, "payloadRef");
@@ -126,11 +123,22 @@ final class McpToolSupport {
   }
 
   static String contentValue(Object value) {
+    return renderedContent(value);
+  }
+
+  /** W1-1：content 必须是已渲染好的单个字符串，不静默序列化 JSON。 */
+  static String renderedContent(Object value) {
+    if (value == null) {
+      return null;
+    }
     JsonNode node = InboxJson.MAPPER.valueToTree(value);
     if (node == null || node.isNull()) {
       return null;
     }
-    return node.isTextual() ? node.asText() : node.toString();
+    if (!node.isTextual()) {
+      throw new IllegalArgumentException("content 必须是已渲染好的单个字符串");
+    }
+    return node.asText();
   }
 
   static Map<String, Object> schema(

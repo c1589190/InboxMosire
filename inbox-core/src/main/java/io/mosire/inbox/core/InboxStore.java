@@ -72,6 +72,21 @@ public interface InboxStore extends AutoCloseable {
 
   int expireClaims(Instant now, int limit);
 
+  /**
+   * 扫描所有 inbox，把到期的 available item 合并为 delivery 并写 push 事件；同时处理 TTL 重推。
+   *
+   * @return 本次写出的事件条数（含 changed/push）
+   */
+  default int deliverDue(Instant now, DeliveryPolicy policy) {
+    return 0;
+  }
+
+  /** ack 一条 delivery：覆盖的 available item 直接置 done。 */
+  default DeliveryAck ackDelivery(
+      String inboxId, String deliveryId, Instant now, int notifyThreshold) {
+    throw new UnsupportedOperationException("当前存储不支持 delivery ack");
+  }
+
   List<StoredEvent> eventsAfter(String inboxId, long afterSeq, int limit);
 
   long latestEventSeq(String inboxId);

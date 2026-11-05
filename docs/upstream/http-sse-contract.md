@@ -55,7 +55,7 @@ Content-Type: application/json
   "channel": "ticket",
   "kind": "reply",
   "summary": "工单更新",
-  "content": {"ticketId": "t-42", "body": "正文只允许在 claim 后返回"},
+  "content": "已渲染的单个字符串正文；对象/数组会返回 422 INVALID_ARGUMENT",
   "contentRef": null,
   "dedupeKey": "ticket:t-42:reply:7",
   "priority": 0,
@@ -70,7 +70,8 @@ Content-Type: application/json
 | `channel` | 是 | `[A-Za-z0-9._-]{1,64}` |
 | `kind` | 否 | 默认 `notification` |
 | `title` | 否 | 最长 512；不在 SSE/wake 中出现 |
-| `payload` | 否 | 任意 JSON 值；claim 后才返回 |
+| `content` | 否 | 单个已渲染字符串；可经 `inbox_view`/`inbox_claim` 或 `io.mosire.inbox.push.v1` 返回 |
+| `payload` | 否 | `content` 的兼容别名，同样只接受字符串 |
 | `payloadRef` | 否 | 外部正文引用，最长 2048 |
 | `dedupeKey` | 否 | 同 inbox+channel 的活跃通知去重 |
 | `priority` | 否 | -1000..1000，默认 0 |
@@ -137,6 +138,17 @@ data: {"specversion":"1.0","id":"evt_...","source":"urn:inboxmosire:inbox:main",
 
 ```
 
+推送帧（新增）：
+
+```text
+id: 130
+event: inbox.push
+data: {"specversion":"1.0","id":"evt_...","source":"urn:inboxmosire:inbox:main","type":"io.mosire.inbox.push.v1","subject":"main","time":"2026-11-06T00:00:01Z","datacontenttype":"application/json","data":{"inbox":"main","deliveryId":"dlv_...","itemIds":["itm_..."],"text":"渲染后的正文","attachments":[],"important":true,"remaining":1,"revision":9}}
+
+```
+
+`inbox.push` 的 `text` 是合并后的已渲染正文；`inbox.changed` 仍只携带计数与 `changedChannels`。
+
 心跳：
 
 ```text
@@ -155,14 +167,16 @@ data: {"specversion":"1.0","id":"evt_...","source":"urn:inboxmosire:inbox:main",
 
 #### 隐私边界
 
-SSE 事件不得包含：
+`io.mosire.inbox.changed.v1` 事件不得包含：
 
 - item `title`
-- item `payload`
+- item `payload`/`content`
 - `payloadRef`
 - claim token
 - API token
 - 玩家/工单/推文正文
+
+`io.mosire.inbox.push.v1` 按推送契约携带已渲染正文 `text`，但仍不得包含 claim token、API token，也不得把 itemId/priority/source 拼进正文。
 
 ## 3. 错误响应
 

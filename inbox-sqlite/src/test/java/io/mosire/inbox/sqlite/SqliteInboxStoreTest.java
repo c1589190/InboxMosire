@@ -7,10 +7,14 @@ import io.mosire.inbox.core.ClaimResult;
 import io.mosire.inbox.core.CompleteResult;
 import io.mosire.inbox.core.Completion;
 import io.mosire.inbox.core.CompletionOutcome;
+import io.mosire.inbox.core.DeliveryAck;
+import io.mosire.inbox.core.DeliveryPolicy;
+import io.mosire.inbox.core.InboxEventTypes;
 import io.mosire.inbox.core.InboxException;
 import io.mosire.inbox.core.PushCommand;
 import io.mosire.inbox.core.PushResult;
 import io.mosire.inbox.core.ReleaseResult;
+import io.mosire.inbox.core.StoredEvent;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -18,6 +22,7 @@ import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -314,5 +319,199 @@ class SqliteInboxStoreTest {
           .extracting(error -> ((InboxException) error).code())
           .isEqualTo(InboxException.Code.NOT_FOUND);
     }
+  }
+
+  @Test
+  void dueItemsOfSameInboxAreMergedIntoSingleDeliveryAndAckClosesThem() {
+    try (SqliteDatabase db = SqliteDatabase.open(temp.resolve("inbox.db"))) {
+      var store = db.inboxStore();
+      Instant now = Instant.parse("2026-11-06T00:00:00Z");
+      String important =
+          store
+              .push(
+                  new PushCommand(
+                      "main", "ticket", "reply", "重要", "A", null, null, 200, now.minusSeconds(31)),
+                  now)
+              .itemId();
+      String normal =
+          store
+              .push(
+                  new PushCommand(
+                      "main", "ticket", "reply", "普通", "B", "asset:annex", null, 0, now.minusSeconds(31)),
+                  now)
+              .itemId();
+      DeliveryPolicy policy =
+          new DeliveryPolicy(
+              200, Duration.ofSeconds(1), Duration.ofSeconds(30), Duration.ofSeconds(600), 3);
+
+      assertThat(store.deliverDue(now, policy)).isEqualTo(1);
+      StoredEvent push =
+          store.eventsAfter("main", 0, 100).stream()
+              .filter(StoredEvent::isPush)
+              .findFirst()
+              .orElseThrow();
+      assertThat(push.eventType()).isEqualTo(InboxEventTypes.PUSH);
+      assertThat(push.data().get("text")).isEqualTo("A\n\nB");
+      assertThat(push.data().get("important")).isEqualTo(true);
+      @SuppressWarnings("unchecked")
+      List<String> pushedItemIds = (List<String>) push.data().get("itemIds");
+      assertThat(pushedItemIds).containsExactlyInAnyOrder(important, normal);
+      List<Map<String, Object>> attachments =
+          (List<Map<String, Object>>) push.data().get("attachments");
+      assertThat(attachments).extracting(entry -> entry.get("ref")).containsExactly("asset:annex");
+      assertThat(push.data().get("remaining")).isEqualTo(2);
+
+      String deliveryId = (String) push.data().get("deliveryId");
+      assertThat(deliveryId).startsWith("dlv_");
+      DeliveryAck first = store.ackDelivery("main", deliveryId, now.plusSeconds(1), 200);
+      assertThat(first.acked()).isTrue();
+      assertThat(first.closedItems()).containsExactlyInAnyOrder(important, normal);
+      assertThat(first.remaining()).isZero();
+      assertThat(first.remainingImportant()).isZero();
+
+      DeliveryAck second = store.ackDelivery("main", deliveryId, now.plusSeconds(2), 200);
+      assertThat(second.acked()).isFalse();
+      assertThat(second.closedItems()).isEmpty();
+      assertThat(second.remaining()).isZero();
+      assertThat(store.status("main", Set.of()).available()).isZero();
+    }
+  }
+
+  @Test
+  void importantItemsArePushedAfterImportantDelayAndNormalAfterNormalDelay() {
+    try (SqliteDatabase db = SqliteDatabase.open(temp.resolve("inbox.db"))) {
+      var store = db.inboxStore();
+      Instant now = Instant.parse("2026-11-06T00:00:00Z");
+      store.push(
+          new PushCommand(
+              "main", "ticket", "reply", "重要", "IMPORTANT", null, null, 200, now.minusSeconds(1)),
+          now);
+      store.push(
+          new PushCommand(
+              "main", "ticket", "reply", "普通", "NORMAL", null, null, 0, now.minusSeconds(1)),
+          now);
+      DeliveryPolicy policy =
+          new DeliveryPolicy(
+              200, Duration.ofSeconds(1), Duration.ofSeconds(30), Duration.ofSeconds(600), 3);
+
+      assertThat(store.deliverDue(now, policy)).isEqualTo(1);
+      StoredEvent first = pushEvents(store).getLast();
+      assertThat(first.data().get("text")).isEqualTo("IMPORTANT");
+
+      assertThat(store.deliverDue(now.plusSeconds(28), policy)).isZero();
+      assertThat(store.deliverDue(now.plusSeconds(29), policy)).isEqualTo(1);
+      assertThat(pushEvents(store).getLast().data().get("text")).isEqualTo("NORMAL");
+    }
+  }
+
+  @Test
+  void unackedDeliveryRetriesThenBecomesUndeliveredWithoutLosingItems() {
+    try (SqliteDatabase db = SqliteDatabase.open(temp.resolve("inbox.db"))) {
+      var store = db.inboxStore();
+      Instant t0 = Instant.parse("2026-11-06T00:00:00Z");
+      String itemId =
+          store
+              .push(
+                  new PushCommand(
+                      "main", "ops", "alert", "s", "body", null, null, 0, t0.minusSeconds(5)),
+                  t0)
+              .itemId();
+      DeliveryPolicy policy =
+          new DeliveryPolicy(
+              200, Duration.ZERO, Duration.ZERO, Duration.ofSeconds(10), 3);
+
+      assertThat(store.deliverDue(t0, policy)).isEqualTo(1);
+      assertThat(store.deliverDue(t0.plusSeconds(10), policy)).isEqualTo(1);
+      assertThat(store.deliverDue(t0.plusSeconds(20), policy)).isEqualTo(1);
+      assertThat(store.deliverDue(t0.plusSeconds(30), policy)).isZero();
+
+      List<StoredEvent> pushes = pushEvents(store);
+      assertThat(pushes).hasSize(3);
+      String deliveryId = (String) pushes.getFirst().data().get("deliveryId");
+      assertThat(pushes)
+          .allSatisfy(event -> assertThat(event.data().get("deliveryId")).isEqualTo(deliveryId));
+      assertThat(store.status("main", Set.of()).available()).isEqualTo(1);
+      assertThat(store.viewItem("main", itemId, Set.of()).status().wireValue())
+          .isEqualTo("available");
+    }
+  }
+
+  @Test
+  void legacyDatabaseUpgradesToVersionTwoAndCanDeliverAndAck() throws Exception {
+    Path dbFile = temp.resolve("legacy-delivery.db");
+    try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + dbFile);
+        Statement statement = connection.createStatement()) {
+      statement.execute(
+          """
+          CREATE TABLE inbox (
+            id         TEXT PRIMARY KEY,
+            revision   INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          )
+          """);
+      statement.execute(
+          """
+          CREATE TABLE inbox_item (
+            id              TEXT PRIMARY KEY,
+            inbox_id        TEXT NOT NULL REFERENCES inbox(id) ON DELETE CASCADE,
+            channel         TEXT NOT NULL,
+            kind            TEXT NOT NULL,
+            title           TEXT,
+            payload         TEXT,
+            payload_ref     TEXT,
+            dedupe_key      TEXT,
+            priority        INTEGER NOT NULL DEFAULT 0,
+            status          TEXT NOT NULL,
+            attempts        INTEGER NOT NULL DEFAULT 0,
+            revision        INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT NOT NULL,
+            updated_at      TEXT NOT NULL,
+            available_at    TEXT NOT NULL,
+            claimed_at      TEXT,
+            completed_at    TEXT,
+            outcome         TEXT,
+            outcome_summary TEXT
+          )
+          """);
+    }
+
+    Instant now = Instant.parse("2026-11-06T00:00:00Z");
+    try (SqliteDatabase db = SqliteDatabase.open(dbFile)) {
+      var store = db.inboxStore();
+      String itemId =
+          store
+              .push(
+                  new PushCommand(
+                      "main", "ops", "alert", "title", "payload", null, null, 0, now.minusSeconds(5)),
+                  now)
+              .itemId();
+      DeliveryPolicy policy =
+          new DeliveryPolicy(200, Duration.ZERO, Duration.ZERO, Duration.ofSeconds(60), 3);
+      assertThat(store.deliverDue(now, policy)).isEqualTo(1);
+      String deliveryId = (String) pushEvents(store).getFirst().data().get("deliveryId");
+      DeliveryAck ack = store.ackDelivery("main", deliveryId, now, 200);
+      assertThat(ack.acked()).isTrue();
+      assertThat(ack.closedItems()).containsExactly(itemId);
+    }
+
+    try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + dbFile);
+        Statement statement = connection.createStatement();
+        var rows = statement.executeQuery("SELECT MAX(version) FROM schema_migration")) {
+      assertThat(rows.next()).isTrue();
+      assertThat(rows.getInt(1)).isEqualTo(2);
+    }
+    try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + dbFile);
+        Statement statement = connection.createStatement();
+        var rows =
+            statement.executeQuery(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='inbox_delivery'")) {
+      assertThat(rows.next()).isTrue();
+      assertThat(rows.getInt(1)).isEqualTo(1);
+    }
+  }
+
+  private static List<StoredEvent> pushEvents(SqliteInboxStore store) {
+    return store.eventsAfter("main", 0, 200).stream().filter(StoredEvent::isPush).toList();
   }
 }

@@ -26,11 +26,21 @@ public final class InboxService {
   private final InboxStore store;
   private final Clock clock;
   private final InboxChangeNotifier notifier;
+  private final DeliveryPolicy deliveryPolicy;
 
   public InboxService(InboxStore store, Clock clock, InboxChangeNotifier notifier) {
+    this(store, clock, notifier, DeliveryPolicy.defaults());
+  }
+
+  public InboxService(
+      InboxStore store,
+      Clock clock,
+      InboxChangeNotifier notifier,
+      DeliveryPolicy deliveryPolicy) {
     this.store = Objects.requireNonNull(store, "store");
     this.clock = Objects.requireNonNull(clock, "clock");
     this.notifier = Objects.requireNonNull(notifier, "notifier");
+    this.deliveryPolicy = Objects.requireNonNull(deliveryPolicy, "deliveryPolicy");
   }
 
   public PushResult push(PushCommand command) {
@@ -284,6 +294,36 @@ public final class InboxService {
   public long latestEventSeq(String inboxId) {
     requireId("inbox", inboxId);
     return store.latestEventSeq(inboxId);
+  }
+
+  /**
+   * 到点推送扫描：由守护线程按可配置间隔调用；也可在单测里直接注入时钟后调用。
+   *
+   * @return 本次写出的 outbox 事件数
+   */
+  public int deliverDue() {
+    int emitted = store.deliverDue(clock.instant(), deliveryPolicy);
+    if (emitted > 0) {
+      notifier.changed();
+    }
+    return emitted;
+  }
+
+  /** ack 一条 delivery。重复 ack 返回 acked=false，不报错。 */
+  public DeliveryAck ackDelivery(String inboxId, String deliveryId) {
+    requireId("inbox", inboxId);
+    requireText("deliveryId", deliveryId, 128, true);
+    DeliveryAck result =
+        store.ackDelivery(
+            inboxId, deliveryId, clock.instant(), deliveryPolicy.notifyThreshold());
+    if (result.acked()) {
+      notifier.changed();
+    }
+    return result;
+  }
+
+  public DeliveryPolicy deliveryPolicy() {
+    return deliveryPolicy;
   }
 
   private static void requireItemId(String itemId) {

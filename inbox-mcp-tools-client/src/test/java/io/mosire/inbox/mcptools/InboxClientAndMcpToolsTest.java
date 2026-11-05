@@ -53,7 +53,7 @@ class InboxClientAndMcpToolsTest {
               "app-a",
               InboxModels.PushItem.builder("ticket")
                   .summary("from client")
-                  .content(Map.of("body", "CLIENT_BODY"))
+                  .content("CLIENT_BODY")
                   .source(source)
                   .build());
       assertThat(pushed.itemId()).startsWith("itm_");
@@ -177,7 +177,7 @@ class InboxClientAndMcpToolsTest {
                     Map.of(
                         "channel", "ticket",
                         "summary", "program mcp",
-                        "content", Map.of("body", "MCP_BODY"),
+                        "content", "MCP_BODY",
                         "source", "app_system/runtime/started")));
         assertThat(pushed.isError()).isFalse();
         JsonNode pushJson = JSON.readTree(wireText(pushed));
@@ -207,7 +207,7 @@ class InboxClientAndMcpToolsTest {
         String claimToken = claimJson.get("claimed").get(0).get("claimToken").asText();
         assertThat(claimJson.get("claimed").get(0).get("summary").asText())
             .isEqualTo("program mcp");
-        assertThat(claimJson.get("claimed").get(0).get("content").get("body").asText())
+        assertThat(claimJson.get("claimed").get(0).get("content").asText())
             .isEqualTo("MCP_BODY");
         assertThat(claimJson.get("claimed").get(0).get("source").asText())
             .isEqualTo("app_system/runtime/started");
@@ -297,7 +297,7 @@ class InboxClientAndMcpToolsTest {
               "app-a",
               InboxModels.PushItem.builder("ticket")
                   .summary("initial summary")
-                  .content(Map.of("body", "initial content"))
+                  .content("initial content")
                   .build());
       InboxModels.ItemDetail viewed = client.view("app-a", pushed.itemId());
       assertThat(viewed.summary()).isEqualTo("initial summary");
@@ -409,6 +409,25 @@ class InboxClientAndMcpToolsTest {
             "/mcp",
             Duration.ofSeconds(30),
             "main"));
+  }
+
+  @Test
+  void clientRejectsNonStringContentBeforeSending() throws Exception {
+    try (InboxDaemon daemon = daemon()) {
+      URI base = URI.create("http://127.0.0.1:" + daemon.apiPort());
+      InboxClient client = client(daemon, base, provisionerToken(daemon, "app-a", false));
+      client.ensureInbox("app-a");
+      assertThatThrownBy(
+              () ->
+                  client.push(
+                      "app-a",
+                      InboxModels.PushItem.builder("ticket")
+                          .summary("bad")
+                          .content(Map.of("body", "nope"))
+                          .build()))
+          .isInstanceOf(IllegalArgumentException.class)
+          .hasMessageContaining("content 必须是已渲染好的单个字符串");
+    }
   }
 
   private static InboxClient client(InboxDaemon daemon, URI base, String token) {

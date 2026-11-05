@@ -8,6 +8,15 @@
 - 最近 Inbox 契约提交：`2c4b1c2 docs(errors): 发布 item 冲突 code/details 契约`
 - 最近 DSH 提交：`113a838 feat(rest): 以标准 inbox_rest 工具设置休息`
 
+## 2026-11-06 W1 档位推送契约
+
+- `content` 只接受单个已渲染字符串；JSON 对象/数组返回 `422 INVALID_ARGUMENT`，不静默序列化。
+- 新增 `inbox_delivery` 台账（`schema_migration` v2）与 `io.mosire.inbox.push.v1` / SSE `inbox.push`；旧 `inbox.changed` 保持原样并继续发送。
+- 新增 `POST /v1/inboxes/{inbox}/deliveries/{deliveryId}/ack` 与 MCP `inbox_ack`（共 13 个工具）；ack 幂等，只关闭仍为 `available` 的 item。
+- 档位配置 6 键：threshold 200、importantDelay 1000ms、normalDelay 30000ms、TTL 600000ms、maxAttempts 3、sweep 500ms；`InboxDaemon` 守护线程扫描，`Clock` 可注入。
+- 验证：`./mvnw -o -pl inbox-core,inbox-sqlite,inbox-server,inbox-embedded,inbox-mcp-tools-client -am test` PASS，
+  core 6 / sqlite 13+3 / server 14 / mcp-tools-client 5 / embedded 8；真实外部联调 `NOT_RUN`。
+
 ## 2026-10-28 P8 item source
 
 - 通用 Inbox item 新增可选 `source` 字段（单行、≤512、拒绝控制字符；不解释为指令）。

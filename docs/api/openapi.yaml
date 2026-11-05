@@ -85,9 +85,7 @@ paths:
                   channel: ticket
                   kind: reply
                   title: Ticket updated
-                  payload:
-                    id: ticket-42
-                    body: User-visible content lives here, never in SSE or wake messages.
+                  payload: User-visible rendered text lives here; changed events never carry it.
                   payloadRef: null
                   dedupeKey: ticket-42:reply:7
                   priority: 0
@@ -202,13 +200,24 @@ paths:
       summary: Subscribe to board change events over SSE.
       description: 'Requires bearer scope `events:read`. The response is `text/event-stream`.
 
-        Each event has an SSE `id:` equal to the durable event sequence and an
+        Each event has an SSE `id:` equal to the durable event sequence. The event name is
 
-        `event: inbox.changed` name. The `data:` line is a CloudEvents 1.0 JSON envelope.
+        `inbox.changed` for board-count changes or `inbox.push` for a rendered delivery;
 
-        Events contain counts and channel changes only: no title, payload, claim token,
+        the `data:` line is a CloudEvents 1.0 JSON envelope.
 
-        or API token.
+
+        `io.mosire.inbox.changed.v1` contains counts and channel changes only: no title,
+
+        content, claim token, or API token. `io.mosire.inbox.push.v1` contains the rendered
+
+        delivery text plus routing metadata (`inbox`, `deliveryId`, `itemIds`, `text`,
+
+        `attachments`, `important`, `remaining`, `revision`); it never contains tokens.
+
+        Channel-scoped tokens only receive push events whose delivery items all fall inside
+
+        their allowed channels.
 
 
         A client with no Last-Event-ID starts at the current event tip. Adapters should
@@ -255,6 +264,15 @@ paths:
                     data: {"specversion":"1.0","id":"evt_...","source":"urn:inboxmosire:inbox:main","type":"io.mosire.inbox.changed.v1","subject":"main","time":"2026-10-25T00:00:00Z","datacontenttype":"application/json","data":{"inbox":"main","revision":3,"available":1,"claimed":0,"channels":{"ticket":{"available":1,"claimed":0}},"changedChannels":["ticket"]}}
 
                     '
+                push:
+                  summary: Rendered delivery push frame
+                  value: 'id: 13
+
+                    event: inbox.push
+
+                    data: {"specversion":"1.0","id":"evt_...","source":"urn:inboxmosire:inbox:main","type":"io.mosire.inbox.push.v1","subject":"main","time":"2026-11-06T00:00:01Z","datacontenttype":"application/json","data":{"inbox":"main","deliveryId":"dlv_...","itemIds":["itm_..."],"text":"Rendered text\n\nSecond item","attachments":[{"name":"report.pdf","ref":"asset:report-1"}],"important":true,"remaining":1,"revision":4}}
+
+                    '
         '400':
           description: Invalid Last-Event-ID.
           content:
@@ -273,6 +291,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/inboxes/{inbox}/deliveries/{deliveryId}/ack:
+    post:
+      tags:
+      - Adapter
+      operationId: ackDelivery
+      summary: Acknowledge a pushed delivery and close its available items.
+      description: 'Requires bearer scope `items:manage`, matching claim/complete. Idempotent:
+        acknowledging an already-acked delivery returns HTTP 200 with `acked: false` and
+        the current remaining counts. Only items still in `available` are closed with
+        `completed_at`; items already `claimed` are left for the claim lifecycle.'
+      parameters:
+      - $ref: '#/components/parameters/Inbox'
+      - name: deliveryId
+        in: path
+        required: true
+        schema:
+          type: string
+          example: dlv_7c7d0e...
+      requestBody:
+        required: false
+        description: No body is required.
+      responses:
+        '200':
+          description: Ack result. `acked` is false for an already-acked delivery.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryAckResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
   /v1/inboxes/{inbox}:
     put:
       tags:
@@ -823,8 +877,10 @@ components:
           maxLength: 512
           description: Short summary used by inbox_list, wake summary, and selection.
         content:
-          description: Opaque full content. Returned only by inbox_view or inbox_claim. May be text, Markdown, or serialized
-            JSON.
+          type: string
+          description: 'A single rendered UTF-8 string. Returned by inbox_view/inbox_claim and by
+            io.mosire.inbox.push.v1. JSON objects/arrays are rejected with INVALID_ARGUMENT;
+            the server never silently serializes or stringifies them.'
         contentRef:
           type:
           - string
@@ -838,8 +894,9 @@ components:
           deprecated: true
           description: Legacy alias for summary.
         payload:
+          type: string
           deprecated: true
-          description: Legacy alias for content.
+          description: Legacy alias for content; must also be a single rendered string.
         payloadRef:
           type:
           - string
@@ -1033,6 +1090,108 @@ components:
               type: array
               items:
                 type: string
+    DeliveryAckResponse:
+      type: object
+      required:
+      - deliveryId
+      - acked
+      - closedItems
+      - remaining
+      - remainingImportant
+      properties:
+        deliveryId:
+          type: string
+        acked:
+          type: boolean
+          description: True on the first successful ack; false when the delivery was already acked.
+        closedItems:
+          type: array
+          description: Item ids transitioned from available to done by this call; empty on repeat acks.
+          items:
+            type: string
+        remaining:
+          type: integer
+          format: int64
+          description: Available + claimed items in the inbox after the call.
+        remainingImportant:
+          type: integer
+          format: int64
+          description: Available + claimed items with priority >= the configured notify threshold.
+    CloudEventInboxPush:
+      type: object
+      required:
+      - specversion
+      - id
+      - source
+      - type
+      - subject
+      - time
+      - datacontenttype
+      - data
+      properties:
+        specversion:
+          type: string
+          const: '1.0'
+        id:
+          type: string
+        source:
+          type: string
+          example: urn:inboxmosire:inbox:main
+        type:
+          type: string
+          const: io.mosire.inbox.push.v1
+        subject:
+          type: string
+        time:
+          type: string
+          format: date-time
+        datacontenttype:
+          type: string
+          const: application/json
+        data:
+          type: object
+          required:
+          - inbox
+          - deliveryId
+          - itemIds
+          - text
+          - attachments
+          - important
+          - remaining
+          - revision
+          properties:
+            inbox:
+              type: string
+            deliveryId:
+              type: string
+            itemIds:
+              type: array
+              items:
+                type: string
+            text:
+              type: string
+              description: 'Rendered delivery text: the merged item strings joined by two newlines.
+                This is the only place push carries human-readable body text.'
+            attachments:
+              type: array
+              items:
+                type: object
+                required:
+                - name
+                - ref
+                properties:
+                  name:
+                    type: string
+                  ref:
+                    type: string
+            important:
+              type: boolean
+            remaining:
+              type: integer
+              format: int64
+            revision:
+              type: integer
+              format: int64
     EnsureInboxResponse:
       type: object
       required:

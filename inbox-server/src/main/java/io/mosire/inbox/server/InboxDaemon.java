@@ -24,6 +24,7 @@ public final class InboxDaemon implements AutoCloseable {
   private final InboxMcpServer mcpServer;
   private final ScheduledExecutorService sweeper;
   private final Duration claimSweepInterval;
+  private final Duration deliverySweepInterval;
   private volatile boolean closed;
 
   private InboxDaemon(
@@ -34,7 +35,8 @@ public final class InboxDaemon implements AutoCloseable {
       InboxHttpServer httpServer,
       InboxMcpServer mcpServer,
       ScheduledExecutorService sweeper,
-      Duration claimSweepInterval) {
+      Duration claimSweepInterval,
+      Duration deliverySweepInterval) {
     this.config = config;
     this.database = database;
     this.service = service;
@@ -43,10 +45,16 @@ public final class InboxDaemon implements AutoCloseable {
     this.mcpServer = mcpServer;
     this.sweeper = sweeper;
     this.claimSweepInterval = claimSweepInterval;
+    this.deliverySweepInterval = deliverySweepInterval;
   }
 
   public static InboxDaemon start(ServerConfig config) throws IOException {
-    return start(config, Duration.ofSeconds(5));
+    return start(config, Duration.ofSeconds(5), Clock.systemUTC());
+  }
+
+  public static InboxDaemon start(ServerConfig config, Duration claimSweepInterval)
+      throws IOException {
+    return start(config, claimSweepInterval, Clock.systemUTC());
   }
 
   /**
@@ -57,19 +65,20 @@ public final class InboxDaemon implements AutoCloseable {
    * @return running daemon
    * @throws IOException if a listener cannot bind or the database cannot open
    */
-  public static InboxDaemon start(ServerConfig config, Duration claimSweepInterval)
-      throws IOException {
+  public static InboxDaemon start(
+      ServerConfig config, Duration claimSweepInterval, Clock clock) throws IOException {
     if (claimSweepInterval == null
         || claimSweepInterval.isNegative()
         || claimSweepInterval.isZero()) {
       throw new IllegalArgumentException("claimSweepInterval 必须为正");
     }
     long sweepMillis = Math.max(1L, claimSweepInterval.toMillis());
+    long deliverySweepMillis = Math.max(1L, config.deliverySweepInterval().toMillis());
     SqliteDatabase database = SqliteDatabase.open(databasePath(config));
     try {
       SseNotifier notifier = new SseNotifier();
       InboxService service =
-          new InboxService(database.inboxStore(), Clock.systemUTC(), notifier);
+          new InboxService(database.inboxStore(), clock, notifier, config.deliveryPolicy());
       service.createInbox(config.defaultInbox());
       // Occupancy 表示“当前活着的连接/会话占用”，不是持久业务事实。
       service.clearAllOccupancy();
@@ -112,7 +121,19 @@ public final class InboxDaemon implements AutoCloseable {
           sweepMillis,
           sweepMillis,
           TimeUnit.MILLISECONDS);
+      sweeper.scheduleWithFixedDelay(
+          () -> {
+            try {
+              service.deliverDue();
+            } catch (RuntimeException e) {
+              LOG.error("delivery sweeper 失败", e);
+            }
+          },
+          deliverySweepMillis,
+          deliverySweepMillis,
+          TimeUnit.MILLISECONDS);
       service.sweepExpired();
+      service.deliverDue();
       LOG.info(
           "InboxMosire 已启动 data={} api=http://{}:{}/v1 mcp=http://{}:{}{} sweeper={}",
           databasePath(config),
@@ -122,8 +143,24 @@ public final class InboxDaemon implements AutoCloseable {
           mcp.boundPort(),
           config.mcpPath(),
           durationLabel(claimSweepInterval));
+      LOG.info(
+          "Inbox 推送配置 threshold={} importantDelay={} normalDelay={} ttl={} maxAttempts={} sweep={}",
+          config.notifyThreshold(),
+          durationLabel(config.importantDelay()),
+          durationLabel(config.normalDelay()),
+          durationLabel(config.deliveryTtl()),
+          config.deliveryMaxAttempts(),
+          durationLabel(config.deliverySweepInterval()));
       return new InboxDaemon(
-          config, database, service, notifier, http, mcp, sweeper, claimSweepInterval);
+          config,
+          database,
+          service,
+          notifier,
+          http,
+          mcp,
+          sweeper,
+          claimSweepInterval,
+          config.deliverySweepInterval());
     } catch (IOException | RuntimeException e) {
       database.close();
       throw e;
@@ -153,6 +190,10 @@ public final class InboxDaemon implements AutoCloseable {
 
   public Duration claimSweepInterval() {
     return claimSweepInterval;
+  }
+
+  public Duration deliverySweepInterval() {
+    return deliverySweepInterval;
   }
 
   public InboxService service() {

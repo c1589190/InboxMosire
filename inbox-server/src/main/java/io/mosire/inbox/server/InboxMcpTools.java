@@ -1,6 +1,5 @@
 package io.mosire.inbox.server;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import io.mosire.agentlib.tool.AgentTool;
 import io.mosire.agentlib.tool.ToolResult;
 import io.mosire.inbox.core.AppendItemCommand;
@@ -11,6 +10,7 @@ import io.mosire.inbox.core.CompleteResult;
 import io.mosire.inbox.core.Completion;
 import io.mosire.inbox.core.CompletionAck;
 import io.mosire.inbox.core.CompletionOutcome;
+import io.mosire.inbox.core.DeliveryAck;
 import io.mosire.inbox.core.InboxException;
 import io.mosire.inbox.core.InboxService;
 import io.mosire.inbox.core.InboxStatus;
@@ -55,7 +55,8 @@ public final class InboxMcpTools {
         renewTool(),
         completeTool(),
         releaseTool(),
-        pushTool());
+        pushTool(),
+        ackTool());
   }
 
   private AgentTool statusTool() {
@@ -401,6 +402,31 @@ public final class InboxMcpTools {
         });
   }
 
+  private AgentTool ackTool() {
+    return tool(
+        "inbox_ack",
+        "Acknowledge a pushed delivery. Closes the delivery's available items and returns remaining counts.",
+        McpToolSupport.schema(
+            Map.of(
+                "inbox", McpToolSupport.prop("string", "Inbox id; defaults to the server default."),
+                "deliveryId",
+                    McpToolSupport.prop("string", "Delivery id from an inbox.push event.")),
+            List.of("deliveryId"),
+            false),
+        args -> {
+          String inbox = McpToolSupport.inbox(args, defaultInbox);
+          DeliveryAck ack =
+              service.ackDelivery(inbox, McpToolSupport.requiredString(args, "deliveryId"));
+          Map<String, Object> result = new LinkedHashMap<>();
+          result.put("deliveryId", ack.deliveryId());
+          result.put("acked", ack.acked());
+          result.put("closedItems", ack.closedItems());
+          result.put("remaining", ack.remaining());
+          result.put("remainingImportant", ack.remainingImportant());
+          return result;
+        });
+  }
+
   private Map<String, Object> claimResult(ClaimResult result) {
     List<Map<String, Object>> claimed = new ArrayList<>();
     for (ClaimedItem item : result.claimed()) {
@@ -484,16 +510,9 @@ public final class InboxMcpTools {
         "deleted", result.deleted());
   }
 
+  /** content 已是渲染好的单个字符串；工具原样返回，不再二次解析 JSON。 */
   private static Object parseContent(String content) {
-    if (content == null || content.isBlank()) {
-      return null;
-    }
-    try {
-      JsonNode node = InboxJson.MAPPER.readTree(content);
-      return node;
-    } catch (Exception ignored) {
-      return content;
-    }
+    return content == null || content.isBlank() ? null : content;
   }
 
   private static String detailedMessage(String message, Map<String, Object> details) {
@@ -513,7 +532,13 @@ public final class InboxMcpTools {
     props.put("channel", McpToolSupport.prop("string", "Logical channel."));
     props.put("kind", McpToolSupport.prop("string", "Item kind; defaults to notification."));
     props.put("summary", McpToolSupport.prop("string", "Short summary shown in list/wake."));
-    props.put("content", Map.of("description", "Opaque full content, returned only by view/claim."));
+    props.put(
+        "content",
+        Map.of(
+            "type",
+            "string",
+            "description",
+            "Rendered single string. JSON objects/arrays are rejected with INVALID_ARGUMENT."));
     props.put("contentRef", McpToolSupport.prop("string", "Optional external content reference."));
     props.put("title", McpToolSupport.prop("string", "Deprecated alias for summary."));
     props.put("payload", Map.of("description", "Deprecated alias for content."));

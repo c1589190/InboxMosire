@@ -62,6 +62,7 @@ public final class InboxClient {
   }
 
   public InboxModels.PushResult push(String inboxId, InboxModels.PushItem item) {
+    requireRenderedContent(item.content());
     return requestJson(
         "POST", "/v1/inboxes/" + encode(inboxId) + "/items", item, InboxModels.PushResult.class, 200, 201);
   }
@@ -131,6 +132,13 @@ public final class InboxClient {
             200));
   }
 
+  /** W1-1：只接受已渲染好的单个字符串（null 表示不设置）。 */
+  private static void requireRenderedContent(Object content) {
+    if (content != null && !(content instanceof String)) {
+      throw new IllegalArgumentException("content 必须是已渲染好的单个字符串");
+    }
+  }
+
   private static InboxModels.ItemDetail normalizeDetail(InboxModels.ItemDetail detail) {
     Object content = detail.content();
     if (content instanceof String text) {
@@ -159,6 +167,7 @@ public final class InboxClient {
 
   public InboxModels.ItemMutation update(
       String inboxId, String itemId, InboxModels.UpdateItem update) {
+    requireRenderedContent(update.content());
     return requestJson(
         "PATCH",
         "/v1/inboxes/" + encode(inboxId) + "/items/" + encode(itemId),
@@ -169,6 +178,7 @@ public final class InboxClient {
 
   public InboxModels.ItemMutation append(
       String inboxId, String itemId, InboxModels.AppendItem append) {
+    requireRenderedContent(append.content());
     return requestJson(
         "POST",
         "/v1/inboxes/" + encode(inboxId) + "/items/" + encode(itemId) + "/append",
